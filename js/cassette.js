@@ -452,11 +452,85 @@ const Cassette = (() => {
         _textarea = textarea;
         textarea.addEventListener('input', onInput);
 
-        // Save cursor position on any interaction so button clicks
-        // don't lose the selection before handleNewBlock can read it
-        textarea.addEventListener('mouseup', () => saveSelection(textarea));
+        // Save cursor position continuously for button fallback
         textarea.addEventListener('keyup',   () => saveSelection(textarea));
-        textarea.addEventListener('focus',   () => saveSelection(textarea));
+        textarea.addEventListener('mouseup', () => saveSelection(textarea));
+
+        // Primary trigger: selectionchange fires when DMO's "Next Field"
+        // selects a bracket placeholder — works regardless of input method
+        document.addEventListener('selectionchange', () => {
+            // Only act when this textarea is the active element
+            if (document.activeElement !== textarea) return;
+            saveSelection(textarea);
+            autoFillPlaceholderIfSelected(textarea);
+        });
+    }
+
+    /**
+     * Fires when the selection changes (including DMO "Next Field" navigation).
+     * If the selected text looks like a bracket placeholder AND the line
+     * starts with [___] at the beginning, auto-fill with the next block label.
+     *
+     * DMO selects the content INSIDE the brackets e.g. "___" or "   "
+     * so we check if the character just before selectionStart is "[" 
+     * and just after selectionEnd is "]" to confirm it's a bracket selection.
+     */
+    function autoFillPlaceholderIfSelected(textarea) {
+        const text  = textarea.value;
+        const start = textarea.selectionStart;
+        const end   = textarea.selectionEnd;
+
+        // Must be an actual selection, not just a cursor position
+        if (start === end) return;
+
+        // Check if selection is wrapped in brackets
+        const charBefore = text[start - 1];
+        const charAfter  = text[end];
+        const isBracketSelection = charBefore === '[' && charAfter === ']';
+        if (!isBracketSelection) return;
+
+        // The bracket opens at start-1, find the line start
+        const lineStart = text.lastIndexOf('\n', start - 2) + 1;
+        const lineEnd   = text.indexOf('\n', start);
+        const line      = text.substring(lineStart, lineEnd === -1 ? text.length : lineEnd);
+
+        // Line must start with a placeholder bracket
+        const m = line.match(PLACEHOLDER_LINE_PATTERN);
+        if (!m) return;
+
+        // The matched placeholder must start at the beginning of the line
+        // i.e. the opening "[" is at lineStart
+        if (text[lineStart] !== '[') return;
+
+        const ph = {
+            lineStart,
+            matchLength: m[0].length,
+            separator:   m[2]
+        };
+
+        const result = findLastBlock(textarea, lineStart);
+        if (!result) return;
+
+        const { parsed } = result;
+        const sep    = normalizeSeparator(ph.separator);
+        const prefix = buildPrefix(parsed.letter, parsed.number + 1, sep);
+
+        _ignoreNext = true;
+        clearSavedSelection();
+        replacePlaceholderWithBlock(textarea, prefix, ph);
+
+        lastAutoInsert = { inserted: prefix, length: prefix.length, wasPlaceholder: true };
+
+        textarea.dispatchEvent(new CustomEvent('cassette:advance', {
+            bubbles: true,
+            detail: {
+                letter:         parsed.letter,
+                from:           parsed.number,
+                to:             parsed.number + 1,
+                prefix,
+                wasPlaceholder: true
+            }
+        }));
     }
 
     return {
