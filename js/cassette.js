@@ -129,16 +129,19 @@ const Cassette = (() => {
     }
 
     /**
-     * Find the last effective cassette block above the cursor.
-     * Skips indented sub-lines — they don't govern the counter.
-     * A range "A5-A10" returns number=10 so next line gets A11.
+     * Find the last effective cassette block above a given position in the textarea.
+     * Skips indented sub-lines and placeholder lines.
+     * @param {HTMLTextAreaElement} textarea
+     * @param {number} [upToPos] - search limit; defaults to selectionStart
      */
-    function findLastBlock(textarea) {
-        const text  = textarea.value.substring(0, textarea.selectionStart);
+    function findLastBlock(textarea, upToPos) {
+        const pos   = upToPos !== undefined ? upToPos : textarea.selectionStart;
+        const text  = textarea.value.substring(0, pos);
         const lines = text.split('\n');
         for (let i = lines.length - 1; i >= 0; i--) {
             const line = lines[i];
-            if (/^[\s\t]/.test(line)) continue; // skip indented sub-lines
+            if (/^[\s\t]/.test(line)) continue;          // skip indented sub-lines
+            if (PLACEHOLDER_LINE_PATTERN.test(line)) continue; // skip placeholder lines
             const parsed = parseBlockLine(line);
             if (parsed) return { parsed, lineIndex: i };
         }
@@ -231,7 +234,8 @@ const Cassette = (() => {
         // Check if cursor is on a placeholder line — fill it in-place if so
         const ph = getPlaceholderOnCurrentLine(textarea);
         if (ph) {
-            const result = findLastBlock(textarea);
+            // Search for last block strictly ABOVE this line (from lineStart, not cursor)
+            const result = findLastBlock(textarea, ph.lineStart);
             if (!result) return false;
             const { parsed } = result;
             const sep    = normalizeSeparator(ph.separator);
