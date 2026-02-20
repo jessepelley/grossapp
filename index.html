@@ -424,11 +424,25 @@ html, body {
     height: 30px;
 }
 .hbtn:hover { color: var(--text); border-color: var(--border2); background: var(--surface2); }
+.hbtn.danger:hover { border-color: rgba(248,81,73,.5); color: var(--red); background: rgba(248,81,73,.08); }
+
+/* Submit button — dim by default, only lights up when gross is complete */
 .hbtn.submit {
+    border-color: var(--border2);
+    color: var(--muted);
+}
+.hbtn.submit:hover {
+    border-color: var(--border2);
+    color: var(--text);
+    background: var(--surface2);
+}
+.hbtn.submit[data-complete="1"] {
     border-color: rgba(126,231,135,.4);
     color: var(--green);
 }
-.hbtn.submit:hover { background: var(--green-dim); }
+.hbtn.submit[data-complete="1"]:hover {
+    background: var(--green-dim);
+}
 
 /* ── Autocomplete dropdown ─────────────────────────────────────────────────── */
 .autocomplete-wrap { position: relative; }
@@ -504,9 +518,16 @@ html, body {
       <span id="header-context" style="font-size:11px;color:var(--muted);font-family:var(--mono);">No specimen selected</span>
     </div>
     <div class="header-actions">
-      <button class="hbtn" onclick="App.copyToClipboard()" title="Copy gross text to clipboard">Copy</button>
-      <button class="hbtn" onclick="App.clearAll()" title="Clear and start a new case">New Case</button>
-      <button class="hbtn submit" onclick="App.submitCase()" title="Submit completed gross to database">Submit Case</button>
+      <button class="hbtn" id="btn-copy-header"
+        onclick="App.copyToClipboard()"
+        title="Copy gross text to clipboard — then paste back into Beaker">Copy</button>
+      <button class="hbtn danger" id="btn-newcase-header"
+        onclick="App.clearAll()"
+        title="Clear everything and start a new case">New Case</button>
+      <button class="hbtn submit" id="btn-submit-header"
+        onclick="App.submitCase()"
+        data-complete="0"
+        title="Fill in all bracketed fields before submitting">Submit Case</button>
     </div>
   </header>
 
@@ -562,17 +583,21 @@ html, body {
     <!-- Dictation panel -->
     <div class="dictation-wrap">
       <div class="dictation-toolbar">
-        <button class="btn" onclick="App.newBlock()" title="Insert next block label">
+        <button class="btn" onclick="App.newBlock()"
+          title="Insert the next block label based on the last cassette line (e.g. A3 → A4). Use if auto-insert didn't fire.">
           + Block <sub style="display:inline;font-size:9px;margin:0">A1→A2</sub>
         </button>
-        <button class="btn" onclick="App.newSpecimen()" title="Insert next specimen label">
+        <button class="btn" onclick="App.newSpecimen()"
+          title="Start a new specimen — increments the letter and resets to block 1 (e.g. A5 → B1). Use when beginning a second specimen.">
           + Specimen <sub style="display:inline;font-size:9px;margin:0">A→B1</sub>
         </button>
-        <button class="btn danger" onclick="App.undoInsert()" title="Undo last auto-insert">
+        <button class="btn danger" onclick="App.undoInsert()"
+          title="Remove the last auto-inserted block label if it was incorrect.">
           ↩ Undo
         </button>
         <div style="flex:1"></div>
-        <button class="btn" onclick="App.detectFromPaste()" title="Re-parse pasted content">
+        <button class="btn" onclick="App.detectFromPaste()"
+          title="Re-scan the gross text: saves the current content as a template, checks for a filled-in specimen site, and refreshes the block map. Use this after making edits or if the template wasn't detected on paste.">
           ⟳ Re-parse
         </button>
       </div>
