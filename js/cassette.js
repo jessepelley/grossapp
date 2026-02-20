@@ -163,28 +163,51 @@ const Cassette = (() => {
     // ── Placeholder detection ───────────────────────────────────────────────────
 
     // Matches a cassette placeholder at the start of a line:
-    //   [   ]-[description]   or   [___]-[description]   or   [ ]-description
-    // Captures: the full opening bracket expression and the separator after it
+    //   [   ]-[description]   or   [___]-[description]   or   [___]-description
     const PLACEHOLDER_LINE_PATTERN = /^(\[[\s_]*\])([\t\-\u2013\u2014]|:\s?|\s)/;
 
     /**
-     * If the cursor's current line starts with a cassette placeholder like [   ] or [___],
-     * returns the line start position and the full placeholder+separator match.
-     * Returns null if not on a placeholder line.
+     * Check if the current line OR the line containing selectionEnd starts with
+     * a cassette placeholder. Handles the case where [___] is selected/highlighted
+     * — clicking a button moves selectionStart but we save it before the click.
+     *
+     * Also checks _savedSelection set by the mousedown handler.
      */
     function getPlaceholderOnCurrentLine(textarea) {
-        const text      = textarea.value;
-        const pos       = textarea.selectionStart;
-        const lineStart = text.lastIndexOf('\n', pos - 1) + 1;
-        const lineEnd   = text.indexOf('\n', pos);
-        const line      = text.substring(lineStart, lineEnd === -1 ? text.length : lineEnd);
-        const m         = line.match(PLACEHOLDER_LINE_PATTERN);
-        if (!m) return null;
-        return {
-            lineStart,
-            matchLength: m[0].length,  // length of "[   ]-" to replace
-            separator:   m[2]
-        };
+        // Try saved selection first (set on mousedown before focus is lost)
+        const positions = [];
+        if (_savedSelection !== null) positions.push(_savedSelection);
+        positions.push(textarea.selectionStart);
+        positions.push(textarea.selectionEnd);
+
+        const text = textarea.value;
+
+        for (const pos of positions) {
+            const lineStart = text.lastIndexOf('\n', pos - 1) + 1;
+            const lineEnd   = text.indexOf('\n', pos);
+            const line      = text.substring(lineStart, lineEnd === -1 ? text.length : lineEnd);
+            const m         = line.match(PLACEHOLDER_LINE_PATTERN);
+            if (m) {
+                return {
+                    lineStart,
+                    matchLength: m[0].length,
+                    separator:   m[2]
+                };
+            }
+        }
+        return null;
+    }
+
+    // Saved cursor position — captured on textarea mousedown/keyup
+    // so button clicks don't lose the selection
+    let _savedSelection = null;
+
+    function saveSelection(textarea) {
+        _savedSelection = textarea.selectionStart;
+    }
+
+    function clearSavedSelection() {
+        _savedSelection = null;
     }
 
     // ── Core insertion ──────────────────────────────────────────────────────────
@@ -234,13 +257,14 @@ const Cassette = (() => {
         // Check if cursor is on a placeholder line — fill it in-place if so
         const ph = getPlaceholderOnCurrentLine(textarea);
         if (ph) {
-            // Search for last block strictly ABOVE this line (from lineStart, not cursor)
+            // Search for last block strictly ABOVE this line
             const result = findLastBlock(textarea, ph.lineStart);
             if (!result) return false;
             const { parsed } = result;
             const sep    = normalizeSeparator(ph.separator);
             const prefix = buildPrefix(parsed.letter, parsed.number + 1, sep);
             _ignoreNext  = true;
+            clearSavedSelection();
             replacePlaceholderWithBlock(textarea, prefix, ph);
             lastAutoInsert = { inserted: prefix, length: prefix.length, wasPlaceholder: true };
             textarea.dispatchEvent(new CustomEvent('cassette:advance', {
@@ -249,6 +273,8 @@ const Cassette = (() => {
             }));
             return true;
         }
+
+        clearSavedSelection();
 
         // Standard case — append new block on next line
         const result = findLastBlock(textarea);
@@ -425,6 +451,12 @@ const Cassette = (() => {
     function init(textarea) {
         _textarea = textarea;
         textarea.addEventListener('input', onInput);
+
+        // Save cursor position on any interaction so button clicks
+        // don't lose the selection before handleNewBlock can read it
+        textarea.addEventListener('mouseup', () => saveSelection(textarea));
+        textarea.addEventListener('keyup',   () => saveSelection(textarea));
+        textarea.addEventListener('focus',   () => saveSelection(textarea));
     }
 
     return {
