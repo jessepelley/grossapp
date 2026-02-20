@@ -13,7 +13,8 @@ const App = (() => {
         template_id: null,
         termsShown:  [],     // terms displayed in word cloud this session
         termsUsed:   [],     // terms detected as used in gross text
-        sections:    { cloud: true, blocks: true, controls: true }
+        sections:    { cloud: true, blocks: true, controls: true },
+        submitted:   false   // guard against duplicate submissions
     };
 
     // ── Init ──────────────────────────────────────────────────────────────────
@@ -33,6 +34,8 @@ const App = (() => {
             updateFooter();
             updateBlockMap();
             scanTermUsage();
+            checkCompletion();
+            maybeInferSpecimen();
         });
 
         // Detect template on paste
@@ -46,21 +49,38 @@ const App = (() => {
             'specimen-dropdown',
             (q) => API.specimens.search(q),
             (item) => {
+                // Selected from dropdown
                 state.specimen = { id: item.id, name: item.name };
                 document.getElementById('specimen-input').value = item.name;
                 closeDropdown('specimen-dropdown');
                 updateHeaderContext();
                 fetchSuggestions();
+                toast(`Specimen: ${item.name}`, 'blue');
             },
             async (value) => {
-                // New specimen typed — upsert it
+                // Typed and confirmed with Enter — upsert
                 const created = await API.specimens.upsert(value);
                 state.specimen = { id: created.id, name: created.name };
+                document.getElementById('specimen-input').value = created.name;
                 updateHeaderContext();
                 fetchSuggestions();
+                toast(`Specimen: ${created.name}`, 'blue');
             },
             (row) => ({ label: row.name, meta: row.case_count ? `${row.case_count} cases` : '' })
         );
+
+        // Also commit specimen on blur (clicking away after typing)
+        document.getElementById('specimen-input').addEventListener('blur', async () => {
+            const val = document.getElementById('specimen-input').value.trim();
+            if (!val || (state.specimen && state.specimen.name === val)) return;
+            try {
+                const created = await API.specimens.upsert(val);
+                state.specimen = { id: created.id, name: created.name };
+                document.getElementById('specimen-input').value = created.name;
+                updateHeaderContext();
+                fetchSuggestions();
+            } catch {}
+        });
 
         // History autocomplete
         setupAutocomplete(
@@ -315,31 +335,22 @@ const App = (() => {
         const text = document.getElementById('dictation').value;
         if (!text.trim()) return;
 
-        // Try to infer specimen from template header lines
-        // "A. The specimen is received in a container labeled "[___]" with the specimen site "[___]"."
-        // Extract everything after "specimen site" as a hint
-        const siteMatch = text.match(/specimen site\s+"([^"]+)"/i);
-        if (siteMatch && !state.specimen) {
-            const inferred = siteMatch[1].trim();
-            if (inferred && inferred !== '___') {
-                try {
-                    const created = await API.specimens.upsert(inferred);
-                    state.specimen = { id: created.id, name: created.name };
-                    document.getElementById('specimen-input').value = created.name;
-                    updateHeaderContext();
-                    toast(`Specimen inferred: ${created.name}`, 'blue');
-                    fetchSuggestions();
-                } catch {}
-            }
-        }
+        // Do NOT try to infer specimen from template text —
+        // placeholders like "[___]" are unfilled and would corrupt the field.
+        // The user sets specimen manually before or after pasting.
+        // Once the database has real completed cases, template matching
+        // can suggest a specimen retroactively — that's a future feature.
 
-        // Submit template text to backend for dedup + placeholder extraction
+        // Save template to backend for dedup + placeholder extraction
+        // Only if specimen is already known
         if (state.specimen && text.length > 30) {
             try {
                 const result = await API.templates.submit(state.specimen.id, text);
                 state.template_id = result.id;
                 if (result.new) {
                     toast(`Template saved (${result.placeholders?.length ?? 0} fields detected)`, 'blue');
+                } else {
+                    toast(`Template recognised`, 'blue');
                 }
             } catch {}
         }
@@ -372,30 +383,70 @@ const App = (() => {
     }
 
     function updateBlockMap() {
-        const ta    = document.getElementById('dictation');
-        const lines = ta.value.split('\n');
-        const map   = document.getElementById('block-map');
-        const blocks = [];
-
-        lines.forEach(line => {
-            const parsed = Cassette.parseBlockLine(line);
-            if (parsed) {
-                const desc = line.substring(parsed.raw.length).trim();
-                blocks.push({ label: `${parsed.letter}${parsed.number}`, desc: desc || '…' });
-            }
-        });
+        const ta     = document.getElementById('dictation');
+        const map    = document.getElementById('block-map');
+        const blocks = Cassette.buildBlockMap(ta.value);
 
         if (blocks.length === 0) {
             map.innerHTML = '<span style="font-size:11px;color:var(--muted2);font-style:italic">No blocks detected</span>';
-        } else {
-            map.innerHTML = blocks.map(b =>
-                `<div class="block-row">
-                    <span class="block-lbl">${b.label}</span>
-                    <span class="block-txt">${b.desc}</span>
-                </div>`
-            ).join('');
-            // Auto-scroll to bottom
-            map.scrollTop = map.scrollHeight;
+            return;
+        }
+
+        map.innerHTML = blocks.map(b => {
+            const labelStyle = b.isRange
+                ? 'color:var(--yellow);font-weight:500'
+                : b.indented
+                    ? 'color:var(--muted);font-weight:400'
+                    : 'color:var(--green);font-weight:500';
+            return `<div class="block-row">
+                <span class="block-lbl" style="${labelStyle}">${b.label}</span>
+                <span class="block-txt">${b.desc}</span>
+            </div>`;
+        }).join('');
+
+        map.scrollTop = map.scrollHeight;
+    }
+
+    // Scan textarea for filled-in specimen site and infer specimen if not yet set
+    // Pattern: specimen site "something that is not [___]"
+    let _inferTimer = null;
+    function maybeInferSpecimen() {
+        if (state.specimen) return;
+        clearTimeout(_inferTimer);
+        _inferTimer = setTimeout(async () => {
+            const text = document.getElementById('dictation').value;
+            // Match: specimen site "VALUE" where VALUE is not a placeholder
+            const m = text.match(/specimen site\s+"([^"\[\]]{3,})"/i);
+            if (!m) return;
+            const inferred = m[1].trim();
+            if (!inferred || /^\[/.test(inferred)) return;
+            try {
+                const created = await API.specimens.upsert(inferred);
+                state.specimen = { id: created.id, name: created.name };
+                document.getElementById('specimen-input').value = created.name;
+                updateHeaderContext();
+                fetchSuggestions();
+                toast(`Specimen inferred: ${created.name}`, 'blue');
+            } catch {}
+        }, 800); // debounce — only fires 800ms after user stops typing
+    }
+
+    // Check if the gross appears complete (no unfilled placeholders remain)
+    // and update the Submit Case button state accordingly
+    function checkCompletion() {
+        const text = document.getElementById('dictation').value;
+        const hasUnfilled = /\[[^\]]{0,60}\]/.test(text); // any [...] remaining
+        const hasContent  = text.trim().length > 50;
+        const complete    = !hasUnfilled && hasContent && !state.submitted;
+
+        const btn = document.getElementById('btn-submit-header');
+        if (btn) {
+            btn.dataset.complete = complete ? '1' : '0';
+            btn.title = complete
+                ? 'Submit completed gross to database'
+                : hasUnfilled
+                    ? 'Unfilled fields remain (shown in brackets)'
+                    : 'Add content before submitting';
         }
     }
 
@@ -428,6 +479,7 @@ const App = (() => {
         if (!state.specimen) { toast('Select a specimen first', ''); return; }
         const gross = document.getElementById('dictation').value.trim();
         if (gross.length < 10) { toast('Gross description is too short', ''); return; }
+        if (state.submitted) { toast('Already submitted — start a New Case', ''); return; }
 
         try {
             await API.cases.submit({
@@ -438,7 +490,9 @@ const App = (() => {
                 terms_shown:  state.termsShown,
                 terms_used:   state.termsUsed
             });
+            state.submitted = true;
             toast('Case submitted ✓', 'green');
+            checkCompletion(); // update button state
         } catch (e) {
             toast('Submission failed', '');
             console.error(e);
@@ -479,6 +533,7 @@ const App = (() => {
         state.template_id = null;
         state.termsShown  = [];
         state.termsUsed   = [];
+        state.submitted   = false;
 
         updateFooter();
         updateHeaderContext();
