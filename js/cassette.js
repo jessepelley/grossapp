@@ -483,14 +483,16 @@ const Cassette = (() => {
         // Must be an actual selection, not just a cursor position
         if (start === end) return;
 
-        // Check if selection is wrapped in brackets
-        const charBefore = text[start - 1];
-        const charAfter  = text[end];
-        const isBracketSelection = charBefore === '[' && charAfter === ']';
+        // Check if selection includes the surrounding brackets
+        // DMO selects the full [___] including brackets
+        // so selectionStart points to "[" and selectionEnd-1 points to "]"
+        const charAtStart = text[start];
+        const charAtEnd   = text[end - 1];
+        const isBracketSelection = charAtStart === '[' && charAtEnd === ']';
         if (!isBracketSelection) return;
 
-        // The bracket opens at start-1, find the line start
-        const lineStart = text.lastIndexOf('\n', start - 2) + 1;
+        // Line start is from selectionStart (which is at "[")
+        const lineStart = text.lastIndexOf('\n', start - 1) + 1;
         const lineEnd   = text.indexOf('\n', start);
         const line      = text.substring(lineStart, lineEnd === -1 ? text.length : lineEnd);
 
