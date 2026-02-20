@@ -157,6 +157,33 @@ const Cassette = (() => {
         return `${letter}${number}${separator}`;
     }
 
+    // ── Placeholder detection ───────────────────────────────────────────────────
+
+    // Matches a cassette placeholder at the start of a line:
+    //   [   ]-[description]   or   [___]-[description]   or   [ ]-description
+    // Captures: the full opening bracket expression and the separator after it
+    const PLACEHOLDER_LINE_PATTERN = /^(\[[\s_]*\])([\t\-\u2013\u2014]|:\s?|\s)/;
+
+    /**
+     * If the cursor's current line starts with a cassette placeholder like [   ] or [___],
+     * returns the line start position and the full placeholder+separator match.
+     * Returns null if not on a placeholder line.
+     */
+    function getPlaceholderOnCurrentLine(textarea) {
+        const text      = textarea.value;
+        const pos       = textarea.selectionStart;
+        const lineStart = text.lastIndexOf('\n', pos - 1) + 1;
+        const lineEnd   = text.indexOf('\n', pos);
+        const line      = text.substring(lineStart, lineEnd === -1 ? text.length : lineEnd);
+        const m         = line.match(PLACEHOLDER_LINE_PATTERN);
+        if (!m) return null;
+        return {
+            lineStart,
+            matchLength: m[0].length,  // length of "[   ]-" to replace
+            separator:   m[2]
+        };
+    }
+
     // ── Core insertion ──────────────────────────────────────────────────────────
 
     function insertAtCursor(textarea, text) {
@@ -182,9 +209,44 @@ const Cassette = (() => {
         textarea.focus();
     }
 
+    /**
+     * Replace a placeholder at the start of the current line with the next block prefix.
+     * e.g. "[   ]-[description]" → "A8-[description]"
+     * Cursor ends up just after the new prefix, ready to dictate.
+     */
+    function replacePlaceholderWithBlock(textarea, prefix, ph) {
+        const text   = textarea.value;
+        const before = text.substring(0, ph.lineStart);
+        const rest   = text.substring(ph.lineStart + ph.matchLength);
+        textarea.value = before + prefix + rest;
+        const newPos   = ph.lineStart + prefix.length;
+        textarea.selectionStart = textarea.selectionEnd = newPos;
+        textarea.focus();
+        textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+
     // ── Public actions ──────────────────────────────────────────────────────────
 
     function handleNewBlock(textarea) {
+        // Check if cursor is on a placeholder line — fill it in-place if so
+        const ph = getPlaceholderOnCurrentLine(textarea);
+        if (ph) {
+            const result = findLastBlock(textarea);
+            if (!result) return false;
+            const { parsed } = result;
+            const sep    = normalizeSeparator(ph.separator);
+            const prefix = buildPrefix(parsed.letter, parsed.number + 1, sep);
+            _ignoreNext  = true;
+            replacePlaceholderWithBlock(textarea, prefix, ph);
+            lastAutoInsert = { inserted: prefix, length: prefix.length, wasPlaceholder: true };
+            textarea.dispatchEvent(new CustomEvent('cassette:advance', {
+                bubbles: true,
+                detail: { letter: parsed.letter, from: parsed.number, to: parsed.number + 1, prefix, wasPlaceholder: true }
+            }));
+            return true;
+        }
+
+        // Standard case — append new block on next line
         const result = findLastBlock(textarea);
         if (!result) return false;
         const { parsed } = result;
@@ -234,31 +296,79 @@ const Cassette = (() => {
             return;
         }
 
-        if (!cursorIsOnFreshLine(textarea)) return;
+        // ── Case 1: first character typed on a fresh line after Enter ───────────
+        if (cursorIsOnFreshLine(textarea)) {
+            const result = findLastBlock(textarea);
+            if (!result) return;
 
-        // Use findLastBlock which already skips indented sub-lines
-        const result = findLastBlock(textarea);
-        if (!result) return;
+            const { parsed } = result;
+            const sep    = normalizeSeparator(parsed.separator);
+            const prefix = buildPrefix(parsed.letter, parsed.number + 1, sep);
 
-        const { parsed } = result;
-        const sep    = normalizeSeparator(parsed.separator);
-        const prefix = buildPrefix(parsed.letter, parsed.number + 1, sep);
+            _ignoreNext = true;
+            prependToCurrentLine(textarea, prefix);
 
-        _ignoreNext = true;
-        prependToCurrentLine(textarea, prefix);
+            lastAutoInsert = { inserted: prefix, length: prefix.length };
 
-        lastAutoInsert = { inserted: prefix, length: prefix.length };
+            textarea.dispatchEvent(new CustomEvent('cassette:advance', {
+                bubbles: true,
+                detail: {
+                    letter:   parsed.letter,
+                    from:     parsed.number,
+                    to:       parsed.number + 1,
+                    prefix,
+                    wasRange: parsed.isRange || false
+                }
+            }));
+            return;
+        }
 
-        textarea.dispatchEvent(new CustomEvent('cassette:advance', {
-            bubbles: true,
-            detail: {
-                letter:   parsed.letter,
-                from:     parsed.number,
-                to:       parsed.number + 1,
-                prefix,
-                wasRange: parsed.isRange || false
-            }
-        }));
+        // ── Case 2: first character typed on a placeholder line ─────────────────
+        // Detect lines that start with [   ] or [___] and now have one extra char
+        // (meaning the user just started typing into what was a placeholder line)
+        const text      = textarea.value;
+        const pos       = textarea.selectionStart;
+        const lineStart = text.lastIndexOf('\n', pos - 1) + 1;
+        const lineEnd   = text.indexOf('\n', pos);
+        const line      = text.substring(lineStart, lineEnd === -1 ? text.length : lineEnd);
+
+        // Line should match: one extra char + rest of placeholder line
+        // i.e. line is something like "x[   ]-[description]" — char typed before bracket
+        // Actually DMO lands cursor at start, so we check if without first char it's a placeholder
+        const lineWithoutFirst = line.substring(1);
+        if (lineWithoutFirst.match(PLACEHOLDER_LINE_PATTERN)) {
+            const result = findLastBlock(textarea);
+            if (!result) return;
+            const { parsed } = result;
+            // Build next block using placeholder's separator
+            const phMatch = lineWithoutFirst.match(PLACEHOLDER_LINE_PATTERN);
+            const sep     = normalizeSeparator(phMatch[2]);
+            const prefix  = buildPrefix(parsed.letter, parsed.number + 1, sep);
+
+            // Replace the typed char + the placeholder bracket+separator with the prefix
+            const charTyped   = line[0];
+            const phLength    = 1 + phMatch[0].length; // typed char + "[   ]-"
+            const before      = text.substring(0, lineStart);
+            const rest        = text.substring(lineStart + phLength);
+            _ignoreNext       = true;
+            textarea.value    = before + prefix + rest;
+            const newPos      = lineStart + prefix.length;
+            textarea.selectionStart = textarea.selectionEnd = newPos;
+            textarea.focus();
+
+            lastAutoInsert = { inserted: prefix, length: prefix.length };
+
+            textarea.dispatchEvent(new CustomEvent('cassette:advance', {
+                bubbles: true,
+                detail: {
+                    letter:          parsed.letter,
+                    from:            parsed.number,
+                    to:              parsed.number + 1,
+                    prefix,
+                    wasPlaceholder:  true
+                }
+            }));
+        }
     }
 
     // ── Block map builder ─────────────────────────────────────────────────────
