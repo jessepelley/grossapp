@@ -1,0 +1,662 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GrossApp</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;1,300&display=swap');
+
+:root {
+    --bg:         #0d1117;
+    --surface:    #161b24;
+    --surface2:   #1c2333;
+    --border:     #252d3d;
+    --border2:    #2e3850;
+    --accent:     #58a6ff;
+    --accent-dim: rgba(88,166,255,.12);
+    --green:      #7ee787;
+    --green-dim:  rgba(126,231,135,.12);
+    --yellow:     #e3b341;
+    --yellow-dim: rgba(227,179,65,.1);
+    --red:        #f85149;
+    --text:       #cdd9e5;
+    --muted:      #768390;
+    --muted2:     #444c56;
+    --mono:       'IBM Plex Mono', monospace;
+    --sans:       'IBM Plex Sans', sans-serif;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+    height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+/* ── Layout ────────────────────────────────────────────────────────────────── */
+.app {
+    display: grid;
+    grid-template-rows: auto 1fr;
+    height: 100vh;
+    overflow: hidden;
+}
+
+/* ── Header ────────────────────────────────────────────────────────────────── */
+.header {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    padding: 0;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+    height: 46px;
+}
+
+.logo {
+    font-family: var(--mono);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: .18em;
+    color: var(--accent);
+    text-transform: uppercase;
+    padding: 0 20px;
+    border-right: 1px solid var(--border);
+    height: 100%;
+    display: flex;
+    align-items: center;
+}
+
+.header-meta {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 16px;
+    flex: 1;
+    height: 100%;
+    overflow: hidden;
+}
+
+.header-actions {
+    display: flex;
+    align-items: center;
+    gap: 1px;
+    padding: 0 8px;
+    height: 100%;
+    border-left: 1px solid var(--border);
+}
+
+/* ── Context bar (specimen + histories) ────────────────────────────────────── */
+.context-bar {
+    display: grid;
+    grid-template-columns: 1fr 1fr auto;
+    gap: 1px;
+    border-bottom: 1px solid var(--border);
+    background: var(--border);
+}
+
+.context-cell {
+    background: var(--surface);
+    padding: 8px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.context-label {
+    font-family: var(--mono);
+    font-size: 9px;
+    letter-spacing: .15em;
+    color: var(--muted);
+    text-transform: uppercase;
+}
+
+.context-input {
+    background: transparent;
+    border: none;
+    outline: none;
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 13px;
+    width: 100%;
+    caret-color: var(--accent);
+}
+.context-input::placeholder { color: var(--muted2); }
+
+/* History tags */
+.history-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    min-height: 22px;
+    align-items: center;
+}
+
+.tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-family: var(--mono);
+    font-size: 10px;
+    padding: 2px 7px;
+    border-radius: 2px;
+    border: 1px solid var(--border2);
+    color: var(--text);
+    background: var(--surface2);
+    cursor: default;
+}
+.tag.primary {
+    border-color: rgba(88,166,255,.4);
+    background: var(--accent-dim);
+    color: var(--accent);
+}
+.tag-remove {
+    cursor: pointer;
+    color: var(--muted);
+    line-height: 1;
+    font-size: 11px;
+}
+.tag-remove:hover { color: var(--red); }
+
+/* Status pill in context bar */
+.status-pill {
+    background: var(--surface);
+    padding: 8px 16px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 5px;
+    min-width: 140px;
+}
+.pill-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--muted);
+}
+.dot {
+    width: 5px; height: 5px;
+    border-radius: 50%;
+    background: var(--muted2);
+    flex-shrink: 0;
+}
+.dot.on { background: var(--green); box-shadow: 0 0 5px var(--green); }
+.dot.warn { background: var(--yellow); }
+
+/* ── Main body ─────────────────────────────────────────────────────────────── */
+.body {
+    display: grid;
+    grid-template-columns: 1fr 280px;
+    overflow: hidden;
+}
+
+/* ── Dictation area ────────────────────────────────────────────────────────── */
+.dictation-wrap {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    border-right: 1px solid var(--border);
+}
+
+.dictation-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 12px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+    flex-shrink: 0;
+}
+
+#dictation {
+    flex: 1;
+    background: var(--bg);
+    border: none;
+    outline: none;
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 1.8;
+    padding: 18px 22px;
+    resize: none;
+    tab-size: 4;
+    caret-color: var(--accent);
+}
+#dictation::placeholder { color: var(--muted2); font-family: var(--sans); font-style: italic; }
+
+.dictation-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 14px;
+    border-top: 1px solid var(--border);
+    background: var(--surface);
+    flex-shrink: 0;
+}
+
+.footer-stat {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--muted);
+}
+
+#next-block-preview {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--accent);
+}
+
+/* ── Sidebar ───────────────────────────────────────────────────────────────── */
+.sidebar {
+    background: var(--surface);
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+}
+
+.sidebar-section {
+    border-bottom: 1px solid var(--border);
+}
+
+.sidebar-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 9px 14px;
+    cursor: pointer;
+    user-select: none;
+}
+.sidebar-head:hover { background: var(--surface2); }
+
+.sidebar-title {
+    font-family: var(--mono);
+    font-size: 9px;
+    letter-spacing: .15em;
+    color: var(--muted);
+    text-transform: uppercase;
+}
+
+.sidebar-toggle {
+    font-size: 9px;
+    color: var(--muted2);
+}
+
+.sidebar-body {
+    padding: 10px 12px 14px;
+}
+
+/* ── Word cloud ────────────────────────────────────────────────────────────── */
+#word-cloud {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    min-height: 40px;
+}
+
+.cloud-term {
+    font-family: var(--mono);
+    font-size: 11px;
+    padding: 3px 8px;
+    border-radius: 2px;
+    border: 1px solid var(--border2);
+    color: var(--muted);
+    background: transparent;
+    cursor: pointer;
+    transition: all .1s;
+    user-select: none;
+    line-height: 1.4;
+}
+.cloud-term:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: var(--accent-dim);
+}
+.cloud-term.used {
+    border-color: rgba(126,231,135,.35);
+    color: var(--green);
+    background: var(--green-dim);
+}
+.cloud-term.inserted {
+    border-color: rgba(88,166,255,.5);
+    color: var(--accent);
+    background: var(--accent-dim);
+}
+
+.cloud-empty {
+    font-size: 11px;
+    color: var(--muted2);
+    font-style: italic;
+    padding: 4px 0;
+}
+
+/* ── Block map ─────────────────────────────────────────────────────────────── */
+#block-map {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    max-height: 200px;
+    overflow-y: auto;
+}
+
+.block-row {
+    display: flex;
+    gap: 8px;
+    font-family: var(--mono);
+    font-size: 11px;
+    align-items: baseline;
+    padding: 1px 0;
+}
+.block-lbl {
+    color: var(--green);
+    font-weight: 500;
+    min-width: 30px;
+    flex-shrink: 0;
+}
+.block-txt {
+    color: var(--muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* ── Manual controls ───────────────────────────────────────────────────────── */
+.btn-group {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+/* ── Shared button styles ──────────────────────────────────────────────────── */
+.btn {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: .06em;
+    padding: 7px 12px;
+    border-radius: 2px;
+    border: 1px solid var(--border2);
+    cursor: pointer;
+    background: transparent;
+    color: var(--text);
+    text-align: left;
+    transition: all .1s;
+    white-space: nowrap;
+}
+.btn:hover                { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); }
+.btn.green:hover          { border-color: var(--green);  color: var(--green);  background: var(--green-dim); }
+.btn.danger:hover         { border-color: var(--red);    color: var(--red);    background: rgba(248,81,73,.08); }
+.btn.primary-btn {
+    border-color: rgba(88,166,255,.5);
+    color: var(--accent);
+    background: var(--accent-dim);
+    text-align: center;
+    padding: 9px;
+    font-size: 11px;
+}
+.btn.primary-btn:hover {
+    background: rgba(88,166,255,.2);
+}
+.btn sub {
+    display: block;
+    font-size: 9px;
+    color: var(--muted);
+    margin-top: 1px;
+    letter-spacing: .03em;
+}
+
+/* Header action buttons */
+.hbtn {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: .05em;
+    padding: 5px 12px;
+    border-radius: 2px;
+    border: 1px solid var(--border2);
+    cursor: pointer;
+    background: transparent;
+    color: var(--muted);
+    transition: all .1s;
+    height: 30px;
+}
+.hbtn:hover { color: var(--text); border-color: var(--border2); background: var(--surface2); }
+.hbtn.submit {
+    border-color: rgba(126,231,135,.4);
+    color: var(--green);
+}
+.hbtn.submit:hover { background: var(--green-dim); }
+
+/* ── Autocomplete dropdown ─────────────────────────────────────────────────── */
+.autocomplete-wrap { position: relative; }
+
+.dropdown {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    right: 0;
+    background: var(--surface2);
+    border: 1px solid var(--border2);
+    border-radius: 3px;
+    z-index: 100;
+    max-height: 180px;
+    overflow-y: auto;
+    display: none;
+}
+.dropdown.open { display: block; }
+
+.dd-item {
+    padding: 7px 12px;
+    cursor: pointer;
+    font-size: 12px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+.dd-item:hover { background: var(--border); }
+.dd-item .dd-count {
+    font-family: var(--mono);
+    font-size: 9px;
+    color: var(--muted2);
+}
+.dd-item.new-entry { color: var(--accent); font-style: italic; }
+
+/* ── Toast ─────────────────────────────────────────────────────────────────── */
+#toast {
+    position: fixed;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%) translateY(10px);
+    background: var(--surface2);
+    border: 1px solid var(--border2);
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 11px;
+    padding: 7px 16px;
+    border-radius: 3px;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .18s, transform .18s;
+    white-space: nowrap;
+    z-index: 200;
+}
+#toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+#toast.green { border-color: rgba(126,231,135,.4); color: var(--green); }
+#toast.blue  { border-color: rgba(88,166,255,.4);  color: var(--accent); }
+
+/* ── Scrollbar ─────────────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 4px; }
+</style>
+</head>
+<body>
+
+<div class="app">
+
+  <!-- ── Header ── -->
+  <header class="header">
+    <div class="logo">GrossApp</div>
+    <div class="header-meta">
+      <span id="header-context" style="font-size:11px;color:var(--muted);font-family:var(--mono);">No specimen selected</span>
+    </div>
+    <div class="header-actions">
+      <button class="hbtn" onclick="App.copyToClipboard()" title="Copy gross text to clipboard">Copy</button>
+      <button class="hbtn" onclick="App.clearAll()" title="Clear and start a new case">New Case</button>
+      <button class="hbtn submit" onclick="App.submitCase()" title="Submit completed gross to database">Submit Case</button>
+    </div>
+  </header>
+
+  <!-- ── Context bar ── -->
+  <div class="context-bar">
+
+    <!-- Specimen -->
+    <div class="context-cell autocomplete-wrap">
+      <span class="context-label">Specimen</span>
+      <input
+        class="context-input"
+        id="specimen-input"
+        type="text"
+        placeholder="e.g. Right hemicolectomy"
+        autocomplete="off"
+      >
+      <div class="dropdown" id="specimen-dropdown"></div>
+    </div>
+
+    <!-- Clinical history -->
+    <div class="context-cell">
+      <span class="context-label">Clinical History</span>
+      <div class="autocomplete-wrap" style="position:relative">
+        <input
+          class="context-input"
+          id="history-input"
+          type="text"
+          placeholder="Add history tag and press Enter"
+          autocomplete="off"
+        >
+        <div class="dropdown" id="history-dropdown"></div>
+      </div>
+      <div class="history-tags" id="history-tags"></div>
+    </div>
+
+    <!-- Status -->
+    <div class="status-pill">
+      <div class="pill-row">
+        <div class="dot on" id="dot-db"></div>
+        <span id="label-db">Database</span>
+      </div>
+      <div class="pill-row">
+        <div class="dot" id="dot-llm"></div>
+        <span id="label-llm">LLM</span>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ── Body ── -->
+  <div class="body">
+
+    <!-- Dictation panel -->
+    <div class="dictation-wrap">
+      <div class="dictation-toolbar">
+        <button class="btn" onclick="App.newBlock()" title="Insert next block label">
+          + Block <sub style="display:inline;font-size:9px;margin:0">A1→A2</sub>
+        </button>
+        <button class="btn" onclick="App.newSpecimen()" title="Insert next specimen label">
+          + Specimen <sub style="display:inline;font-size:9px;margin:0">A→B1</sub>
+        </button>
+        <button class="btn danger" onclick="App.undoInsert()" title="Undo last auto-insert">
+          ↩ Undo
+        </button>
+        <div style="flex:1"></div>
+        <button class="btn" onclick="App.detectFromPaste()" title="Re-parse pasted content">
+          ⟳ Re-parse
+        </button>
+      </div>
+
+      <textarea
+        id="dictation"
+        spellcheck="false"
+        placeholder="Paste your template here, or begin dictating.
+
+The app will detect specimen type from the template and auto-advance
+cassette block labels as you work."
+      ></textarea>
+
+      <div class="dictation-footer">
+        <span class="footer-stat" id="char-count">0 chars</span>
+        <span id="next-block-preview"></span>
+        <span class="footer-stat" id="block-count">0 blocks</span>
+      </div>
+    </div>
+
+    <!-- Sidebar -->
+    <div class="sidebar">
+
+      <!-- Word cloud -->
+      <div class="sidebar-section">
+        <div class="sidebar-head" onclick="App.toggleSection('cloud')">
+          <span class="sidebar-title">Suggested Terms</span>
+          <span class="sidebar-toggle" id="toggle-cloud">▾</span>
+        </div>
+        <div class="sidebar-body" id="section-cloud">
+          <div id="word-cloud">
+            <span class="cloud-empty">Select a specimen to see suggestions</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Block map -->
+      <div class="sidebar-section">
+        <div class="sidebar-head" onclick="App.toggleSection('blocks')">
+          <span class="sidebar-title">Block Map</span>
+          <span class="sidebar-toggle" id="toggle-blocks">▾</span>
+        </div>
+        <div class="sidebar-body" id="section-blocks">
+          <div id="block-map">
+            <span style="font-size:11px;color:var(--muted2);font-style:italic">No blocks detected</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Manual controls -->
+      <div class="sidebar-section">
+        <div class="sidebar-head" onclick="App.toggleSection('controls')">
+          <span class="sidebar-title">Controls</span>
+          <span class="sidebar-toggle" id="toggle-controls">▾</span>
+        </div>
+        <div class="sidebar-body" id="section-controls">
+          <div class="btn-group">
+            <button class="btn green" onclick="App.copyToClipboard()">
+              Copy to clipboard
+              <sub>Ready to paste back into Beaker</sub>
+            </button>
+            <button class="btn" onclick="App.submitCase()">
+              Submit completed case
+              <sub>Saves gross + updates term stats</sub>
+            </button>
+            <button class="btn danger" onclick="App.clearAll()">
+              New case
+              <sub>Clears everything</sub>
+            </button>
+          </div>
+        </div>
+      </div>
+
+    </div><!-- /sidebar -->
+
+  </div><!-- /body -->
+
+</div><!-- /app -->
+
+<div id="toast"></div>
+
+<!-- Scripts -->
+<script src="js/cassette.js"></script>
+<script src="js/api.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
