@@ -44,11 +44,18 @@ const App = (() => {
             scanTermUsage();
             checkCompletion();
             maybeInferSpecimen();
+            onFieldInput();
+            refreshFieldCounter();
         });
 
-        // Detect template on paste
+        // Detect template on paste; also reset field tracking
         ta.addEventListener('paste', () => {
-            setTimeout(() => detectFromPaste(), 50);
+            setTimeout(() => {
+                detectFromPaste();
+                fieldAdv.anchor = -1;
+                clearTimeout(fieldAdv.timer);
+                refreshFieldCounter();
+            }, 50);
         });
 
         // Specimen autocomplete
@@ -76,6 +83,78 @@ const App = (() => {
             },
             (row) => ({ label: row.name, meta: row.case_count ? `${row.case_count} cases` : '' })
         );
+
+        // ── Field advancement init ────────────────────────────────────────────
+        loadFieldPrefs();
+        updateNextBtn();
+
+        // Single-click → next field; double-click (within 260 ms) → toggle auto-advance
+        let _nfClicks = 0, _nfTimer = null;
+        document.getElementById('btn-next-field').addEventListener('click', () => {
+            _nfClicks++;
+            clearTimeout(_nfTimer);
+            _nfTimer = setTimeout(() => {
+                if (_nfClicks >= 2) toggleAutoAdvance();
+                else goToNextField();
+                _nfClicks = 0;
+            }, 260);
+        });
+
+        // Gear button — open/close prefs panel
+        document.getElementById('btn-field-prefs').addEventListener('click', (e) => {
+            e.stopPropagation();
+            toggleFieldPrefs();
+        });
+
+        // Close prefs panel when clicking outside the group
+        document.addEventListener('click', (e) => {
+            const panel = document.getElementById('field-prefs-panel');
+            const grp   = document.getElementById('field-adv-group');
+            if (panel && panel.classList.contains('open') && !grp.contains(e.target)) {
+                panel.classList.remove('open');
+            }
+        });
+
+        // Delay input change
+        document.getElementById('pref-delay').addEventListener('change', (e) => {
+            fieldAdv.delay = Math.max(300, Math.min(8000, parseInt(e.target.value) || 1500));
+            saveFieldPrefs();
+        });
+
+        // Add pause character
+        document.getElementById('pref-add-char').addEventListener('click', () => {
+            const c = prompt('Add pause character (single char):');
+            if (!c) return;
+            const ch = c.trim().charAt(0);
+            if (ch && !fieldAdv.contChars.includes(ch)) {
+                fieldAdv.contChars.push(ch);
+                saveFieldPrefs();
+                renderFieldPrefs();
+            }
+        });
+
+        // Add pause word
+        document.getElementById('pref-add-word').addEventListener('click', () => {
+            const w = prompt('Add pause word:');
+            if (!w) return;
+            const lw = w.trim().toLowerCase();
+            if (lw && !fieldAdv.contWords.includes(lw)) {
+                fieldAdv.contWords.push(lw);
+                saveFieldPrefs();
+                renderFieldPrefs();
+            }
+        });
+
+        // Clear learned exceptions
+        document.getElementById('pref-clear-learned').addEventListener('click', () => {
+            fieldAdv.learned = [];
+            saveFieldPrefs();
+            renderFieldPrefs();
+            toast('Learned exceptions cleared', '');
+        });
+
+        // Cursor-back detection for learning
+        document.addEventListener('selectionchange', checkCursorBack);
 
         // Also commit specimen on blur (clicking away after typing)
         document.getElementById('specimen-input').addEventListener('blur', async () => {
@@ -543,6 +622,12 @@ const App = (() => {
         state.termsUsed   = [];
         state.submitted   = false;
 
+        // Reset field tracking
+        fieldAdv.anchor    = -1;
+        fieldAdv.watchBack = false;
+        clearTimeout(fieldAdv.timer);
+        updateFieldCounter(0, 0);
+
         updateFooter();
         updateHeaderContext();
     }
@@ -604,6 +689,271 @@ const App = (() => {
         toast(`Format: ${next === Cassette.FORMAT_NL ? '1A 1B 1C…' : 'A1 A2 A3…'}`, 'blue');
     }
 
+    // ── Field advancement ─────────────────────────────────────────────────────
+
+    // Mutable preferences + runtime state (all in one object for clarity)
+    const fieldAdv = {
+        auto:      false,
+        delay:     1500,                          // ms before auto-advancing
+        contChars: [',', '.'],                    // end-chars that pause advance
+        contWords: ['with', 'including', 'includes', 'and', 'or', 'to', 'of', 'the', 'a', 'an'],
+        learned:   [],                            // words learned from cursor-back events
+        // runtime (not persisted)
+        anchor:        -1,                        // textarea pos where tracked field started
+        timer:         null,                      // pending auto-advance timeout
+        lastAdvTime:   0,                         // Date.now() of last auto-advance
+        lastAdvFromPos: -1,                       // cursor pos just before last auto-advance
+        lastAdvCtx:    '',                        // last word before the advance (for learning)
+        watchBack:     false,                     // whether we're watching for cursor-back
+    };
+
+    function loadFieldPrefs() {
+        try {
+            const a  = localStorage.getItem('grossapp-field-auto');
+            const d  = localStorage.getItem('grossapp-field-delay');
+            const cc = localStorage.getItem('grossapp-field-cont-chars');
+            const cw = localStorage.getItem('grossapp-field-cont-words');
+            const le = localStorage.getItem('grossapp-field-learned');
+            if (a  !== null) fieldAdv.auto  = a === '1';
+            if (d  !== null) fieldAdv.delay = Math.max(300, Math.min(8000, parseInt(d) || 1500));
+            if (cc) fieldAdv.contChars = JSON.parse(cc);
+            if (cw) fieldAdv.contWords = JSON.parse(cw);
+            if (le) fieldAdv.learned   = JSON.parse(le);
+        } catch { /* ignore corrupt prefs */ }
+    }
+
+    function saveFieldPrefs() {
+        try {
+            localStorage.setItem('grossapp-field-auto',       fieldAdv.auto ? '1' : '0');
+            localStorage.setItem('grossapp-field-delay',      fieldAdv.delay);
+            localStorage.setItem('grossapp-field-cont-chars', JSON.stringify(fieldAdv.contChars));
+            localStorage.setItem('grossapp-field-cont-words', JSON.stringify(fieldAdv.contWords));
+            localStorage.setItem('grossapp-field-learned',    JSON.stringify(fieldAdv.learned));
+        } catch { /* ignore quota errors */ }
+    }
+
+    // Returns true if `pos` is inside a [...] placeholder in `text`
+    function isCursorInField(text, pos) {
+        const lb = text.lastIndexOf('[', pos - 1);
+        if (lb < 0) return false;
+        const rb = text.indexOf(']', lb);
+        if (rb < 0) return false;
+        // Must be: lb < pos <= rb+1, with no ] between lb and pos
+        return pos > lb && pos <= rb + 1 && !text.substring(lb + 1, pos).includes(']');
+    }
+
+    // Returns array of all [...] fields in `text` with start/end indices
+    function findAllFields(text) {
+        const out = [];
+        const re  = /\[[^\]]{0,60}\]/g;
+        let m;
+        while ((m = re.exec(text)) !== null) {
+            out.push({ start: m.index, end: m.index + m[0].length });
+        }
+        return out;
+    }
+
+    // Navigate cursor to the next [...] field, wrapping around if needed.
+    // `fromPos` defaults to current selectionEnd.
+    function goToNextField(fromPos) {
+        const ta     = document.getElementById('dictation');
+        const text   = ta.value;
+        const from   = fromPos !== undefined ? fromPos : ta.selectionEnd;
+        const fields = findAllFields(text);
+
+        if (fields.length === 0) {
+            toast('No fields remaining', '');
+            fieldAdv.anchor = -1;
+            updateFieldCounter(0, 0);
+            return false;
+        }
+
+        // Next field at or after `from`, wrap around if needed
+        let target = fields.find(f => f.start >= from);
+        if (!target) target = fields[0];
+
+        ta.setSelectionRange(target.start, target.end);
+        ta.focus();
+
+        fieldAdv.anchor    = target.start;
+        fieldAdv.watchBack = false;
+        clearTimeout(fieldAdv.timer);
+
+        const idx = fields.indexOf(target) + 1;
+        updateFieldCounter(idx, fields.length);
+        return true;
+    }
+
+    function updateFieldCounter(cur, total) {
+        const el = document.getElementById('field-counter');
+        if (!el) return;
+        if (total === 0) {
+            el.textContent = '';
+            el.classList.remove('has-fields');
+        } else {
+            el.textContent = `${cur}\u2009/\u2009${total}`;
+            el.classList.add('has-fields');
+        }
+    }
+
+    // Refresh field counter based on current cursor position
+    function refreshFieldCounter() {
+        const ta     = document.getElementById('dictation');
+        const fields = findAllFields(ta.value);
+        if (fields.length === 0) { updateFieldCounter(0, 0); return; }
+        const cursor = ta.selectionEnd;
+        let idx = fields.findIndex(f => cursor >= f.start && cursor <= f.end);
+        if (idx < 0) idx = fields.findIndex(f => f.start >= cursor);
+        if (idx < 0) idx = 0; // wrap to first
+        updateFieldCounter(idx + 1, fields.length);
+    }
+
+    // Returns true if `text` (replacement so far) suggests the user isn't done
+    function shouldHoldAdvance(text) {
+        if (!text) return true;
+        const t = text.trim();
+        if (!t) return true;
+
+        // Ends with a continuation character
+        const lastChar = t[t.length - 1];
+        if (fieldAdv.contChars.includes(lastChar)) return true;
+
+        // Last word is a continuation word (strip trailing punctuation)
+        const words    = t.toLowerCase().split(/\s+/);
+        const lastWord = words[words.length - 1].replace(/[.,;:!?]+$/, '');
+        if (fieldAdv.contWords.some(w => w.toLowerCase() === lastWord)) return true;
+        if (fieldAdv.learned.some(w  => w.toLowerCase() === lastWord)) return true;
+
+        return false;
+    }
+
+    // Called on every textarea `input` event — drives auto-advance
+    function onFieldInput() {
+        if (fieldAdv.anchor < 0) return;
+
+        const ta     = document.getElementById('dictation');
+        const text   = ta.value;
+        const cursor = ta.selectionEnd;
+
+        // If cursor is still inside a [...], the field isn't filled yet
+        if (isCursorInField(text, cursor)) {
+            clearTimeout(fieldAdv.timer);
+            return;
+        }
+
+        // Only drive auto-advance when that mode is on
+        if (!fieldAdv.auto) return;
+
+        // Estimate replacement: text from anchor to cursor
+        const anchor = Math.min(fieldAdv.anchor, text.length);
+        const filled = text.substring(anchor, cursor).trim();
+        if (!filled) { clearTimeout(fieldAdv.timer); return; }
+
+        if (shouldHoldAdvance(filled)) { clearTimeout(fieldAdv.timer); return; }
+
+        // Schedule the advance (re-schedule on each keystroke to debounce)
+        clearTimeout(fieldAdv.timer);
+        fieldAdv.timer = setTimeout(() => {
+            const fromPos = document.getElementById('dictation').selectionEnd;
+            const rawFill = document.getElementById('dictation').value
+                .substring(Math.min(fieldAdv.anchor, document.getElementById('dictation').value.length), fromPos)
+                .trim();
+            const words = rawFill.split(/\s+/);
+            fieldAdv.lastAdvCtx     = words[words.length - 1].replace(/[.,;:!?]+$/, '').toLowerCase();
+            fieldAdv.lastAdvFromPos = fromPos;
+            fieldAdv.lastAdvTime    = Date.now();
+            fieldAdv.watchBack      = true;
+            goToNextField(fromPos);
+        }, fieldAdv.delay);
+    }
+
+    // Called on `selectionchange` — watches for cursor-back after auto-advance
+    function checkCursorBack() {
+        if (!fieldAdv.watchBack) return;
+        if (Date.now() - fieldAdv.lastAdvTime > 4000) { fieldAdv.watchBack = false; return; }
+
+        const ta = document.getElementById('dictation');
+        if (document.activeElement !== ta) return;
+
+        // Cursor moved back more than 3 chars from where we auto-advanced from
+        if (ta.selectionStart < fieldAdv.lastAdvFromPos - 3) {
+            fieldAdv.watchBack = false;
+            learnException(fieldAdv.lastAdvCtx);
+        }
+    }
+
+    function learnException(word) {
+        if (!word || word.length < 2) return;
+        if (fieldAdv.learned.includes(word))   return;
+        if (fieldAdv.contWords.includes(word)) return;
+        if (fieldAdv.contChars.includes(word)) return;
+        fieldAdv.learned.push(word);
+        saveFieldPrefs();
+        renderFieldPrefs();
+        toast(`Learned: "${word}" now pauses auto-advance`, 'blue');
+    }
+
+    function toggleAutoAdvance() {
+        fieldAdv.auto = !fieldAdv.auto;
+        saveFieldPrefs();
+        updateNextBtn();
+        if (fieldAdv.auto) {
+            toast('Auto-advance ON — double-click \u25b6 Next to disable', 'green');
+        } else {
+            clearTimeout(fieldAdv.timer);
+            toast('Auto-advance OFF', '');
+        }
+    }
+
+    function updateNextBtn() {
+        const btn = document.getElementById('btn-next-field');
+        if (!btn) return;
+        btn.classList.toggle('auto-mode', fieldAdv.auto);
+        btn.title = fieldAdv.auto
+            ? '\u25b6 Next Field \u2014 Auto ON (double-click to disable)'
+            : '\u25b6 Next Field (double-click to enable auto-advance)';
+    }
+
+    // ── Field prefs panel ─────────────────────────────────────────────────────
+
+    function toggleFieldPrefs() {
+        const panel = document.getElementById('field-prefs-panel');
+        if (!panel) return;
+        const open = panel.classList.toggle('open');
+        if (open) renderFieldPrefs();
+    }
+
+    function renderFieldPrefs() {
+        const delay = document.getElementById('pref-delay');
+        if (delay) delay.value = fieldAdv.delay;
+        renderPrefChips('pref-cont-chars', fieldAdv.contChars, (c) => {
+            fieldAdv.contChars = fieldAdv.contChars.filter(x => x !== c);
+            saveFieldPrefs(); renderFieldPrefs();
+        });
+        renderPrefChips('pref-cont-words', fieldAdv.contWords, (w) => {
+            fieldAdv.contWords = fieldAdv.contWords.filter(x => x !== w);
+            saveFieldPrefs(); renderFieldPrefs();
+        });
+        renderPrefChips('pref-learned', fieldAdv.learned, (w) => {
+            fieldAdv.learned = fieldAdv.learned.filter(x => x !== w);
+            saveFieldPrefs(); renderFieldPrefs();
+        });
+    }
+
+    function renderPrefChips(containerId, items, onRemove) {
+        const el = document.getElementById(containerId);
+        if (!el) return;
+        el.innerHTML = '';
+        items.forEach(item => {
+            const chip = document.createElement('span');
+            chip.className   = 'pref-chip';
+            chip.textContent = item;
+            chip.title       = 'Click to remove';
+            chip.onclick     = () => onRemove(item);
+            el.appendChild(chip);
+        });
+    }
+
     // ── Bootstrap ─────────────────────────────────────────────────────────────
     document.addEventListener('DOMContentLoaded', init);
 
@@ -612,7 +962,8 @@ const App = (() => {
         newBlock, newSpecimen, undoInsert,
         submitCase, copyToClipboard, clearAll,
         toggleSection, detectFromPaste,
-        toggleTheme, toggleFormat
+        toggleTheme, toggleFormat,
+        goToNextField, toggleAutoAdvance, toggleFieldPrefs
     };
 
 })();
