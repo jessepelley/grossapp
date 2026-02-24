@@ -32,15 +32,15 @@
     --accent-dim:  rgba(26,79,138,.10);
     --accent-text: #1a4f8a;
     --green:       #1a7a3c;
-    --green-dim:   rgba(26,122,60,.10);
+    --green-dim:   rgba(26,122,60,.15);
     --yellow:      #8a6000;
     --yellow-dim:  rgba(138,96,0,.10);
     --red:         #b81c1c;
     --red-dim:     rgba(184,28,28,.08);
     --text:        #111827;
     --text2:       #374151;
-    --muted:       #4b5563;
-    --muted2:      #9ca3af;
+    --muted:       #374151;
+    --muted2:      #6b7280;
     --shadow:      0 1px 3px rgba(0,0,0,.10), 0 1px 2px rgba(0,0,0,.06);
     --shadow-md:   0 4px 6px rgba(0,0,0,.07), 0 2px 4px rgba(0,0,0,.05);
 }
@@ -62,8 +62,8 @@
     --red-dim:     rgba(248,81,73,.08);
     --text:        #cdd9e5;
     --text2:       #adbac7;
-    --muted:       #768390;
-    --muted2:      #444c56;
+    --muted:       #8b97a4;
+    --muted2:      #606c7a;
     --shadow:      0 1px 3px rgba(0,0,0,.3);
     --shadow-md:   0 4px 6px rgba(0,0,0,.4);
 }
@@ -428,6 +428,7 @@ html, body {
     border-color: var(--green);
     color: var(--green);
     background: var(--green-dim);
+    font-weight: 600;
 }
 .cloud-term.inserted {
     border-color: var(--accent);
@@ -729,6 +730,19 @@ html, body {
 }
 .pref-clear-btn:hover { border-color: var(--red); color: var(--red); }
 
+/* Paste button */
+.btn.paste-btn.has-template {
+    border-color: var(--green);
+    color: var(--green);
+    background: var(--green-dim);
+    font-weight: 600;
+    animation: paste-glow 1.6s ease-in-out infinite;
+}
+@keyframes paste-glow {
+    0%, 100% { box-shadow: 0 0 0 0 var(--green-dim); }
+    50%       { box-shadow: 0 0 0 3px var(--green-dim); }
+}
+
 </style>
 </head>
 <body>
@@ -829,8 +843,19 @@ html, body {
           ↩ Undo
         </button>
 
+        <!-- Paste from clipboard -->
+        <button class="btn paste-btn" id="btn-paste"
+          onclick="App.pasteFromClipboard()"
+          title="Paste from clipboard (replaces all text)">
+          Paste
+        </button>
+
         <!-- Field advancement -->
         <div class="field-adv-group" id="field-adv-group">
+          <button class="btn next-field" id="btn-prev-field"
+            title="Previous Field">
+            ◀ Prev
+          </button>
           <button class="btn next-field" id="btn-next-field"
             title="Next Field — double-click to toggle auto-advance">
             ▶ Next
@@ -945,8 +970,8 @@ and auto-advance cassette block labels as you work."></textarea>
 <div id="toast"></div>
 
 <!-- bump version string on every JS deploy -->
-<script src="js/cassette.js?v=1.9"></script>
-<script src="js/api.js?v=1.9"></script>
-<script src="js/app.js?v=1.9"></script>
+<script src="js/cassette.js?v=2.0"></script>
+<script src="js/api.js?v=2.0"></script>
+<script src="js/app.js?v=2.0"></script>
 </body>
 </html>
