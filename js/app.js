@@ -31,7 +31,16 @@ const App = (() => {
 
         // Cassette automation
         Cassette.init(ta);
+        // Capture state just before any input for cassette:advance undo
+        ta.addEventListener('beforeinput', () => {
+            _preInputState = { text: ta.value, s: ta.selectionStart, e: ta.selectionEnd };
+        });
         ta.addEventListener('cassette:advance', (e) => {
+            // Push the pre-advance state so undo can reverse auto-inserted blocks
+            if (_preInputState) {
+                pushUndo('block insert', _preInputState.text, { s: _preInputState.s, e: _preInputState.e });
+                _preInputState = null;
+            }
             toast(`Block: ${e.detail.prefix}`, 'blue');
             updateFooter();
             updateBlockMap();
@@ -48,8 +57,9 @@ const App = (() => {
             refreshFieldCounter();
         });
 
-        // Detect template on paste; also reset field tracking
+        // Detect template on paste; save undo snapshot and reset field tracking
         ta.addEventListener('paste', () => {
+            pushUndo('paste', ta.value, { s: ta.selectionStart, e: ta.selectionEnd });
             setTimeout(() => {
                 detectFromPaste();
                 fieldAdv.anchor = -1;
@@ -70,6 +80,7 @@ const App = (() => {
                 closeDropdown('specimen-dropdown');
                 updateHeaderContext();
                 fetchSuggestions();
+                maybeSavePendingTemplate(); // submit raw template now that specimen is known
                 toast(`Specimen: ${item.name}`, 'blue');
             },
             async (value) => {
@@ -79,6 +90,7 @@ const App = (() => {
                 document.getElementById('specimen-input').value = created.name;
                 updateHeaderContext();
                 fetchSuggestions();
+                maybeSavePendingTemplate();
                 toast(`Specimen: ${created.name}`, 'blue');
             },
             (row) => ({ label: row.name, meta: row.case_count ? `${row.case_count} cases` : '' })
@@ -87,6 +99,12 @@ const App = (() => {
         // ── Field advancement init ────────────────────────────────────────────
         loadFieldPrefs();
         updateNextBtn();
+
+        // Prev field button
+        document.getElementById('btn-prev-field').addEventListener('click', goPrevField);
+
+        // Start clipboard background polling (asks for permission once)
+        startClipboardPolling();
 
         // Single-click → next field; double-click (within 260 ms) → toggle auto-advance
         let _nfClicks = 0, _nfTimer = null;
@@ -166,6 +184,7 @@ const App = (() => {
                 document.getElementById('specimen-input').value = created.name;
                 updateHeaderContext();
                 fetchSuggestions();
+                maybeSavePendingTemplate();
             } catch {}
         });
 
@@ -422,24 +441,18 @@ const App = (() => {
         const text = document.getElementById('dictation').value;
         if (!text.trim()) return;
 
-        // Do NOT try to infer specimen from template text —
-        // placeholders like "[___]" are unfilled and would corrupt the field.
-        // The user sets specimen manually before or after pasting.
-        // Once the database has real completed cases, template matching
-        // can suggest a specimen retroactively — that's a future feature.
+        // Save raw template to localStorage immediately (before edits), so it
+        // can be submitted to the backend once a specimen is set.
+        if (text.length > 30 && /\[[^\]]{0,60}\]/.test(text) && !_pendingRawTemplate) {
+            _pendingRawTemplate = text;
+            try { localStorage.setItem('grossapp-pending-template', text); } catch {}
+        }
 
-        // Save template to backend for dedup + placeholder extraction
-        // Only if specimen is already known
-        if (state.specimen && text.length > 30) {
-            try {
-                const result = await API.templates.submit(state.specimen.id, text);
-                state.template_id = result.id;
-                if (result.new) {
-                    toast(`Template saved (${result.placeholders?.length ?? 0} fields detected)`, 'blue');
-                } else {
-                    toast(`Template recognised`, 'blue');
-                }
-            } catch {}
+        // If specimen is known, submit the raw (unfilled) template to backend.
+        // Using _pendingRawTemplate ensures we submit the original unfilled version
+        // even when detectFromPaste is called after the user has started filling in fields.
+        if (state.specimen) {
+            await maybeSavePendingTemplate();
         }
 
         updateFooter();
@@ -453,17 +466,16 @@ const App = (() => {
 
         document.getElementById('char-count').textContent = `${text.length} chars`;
 
-        // Block count + next block preview
-        const lines  = text.split('\n');
-        const blocks = lines.filter(l => /^[A-Z]\d+/.test(l.trimEnd()));
-        document.getElementById('block-count').textContent = `${blocks.length} block${blocks.length !== 1 ? 's' : ''}`;
+        // Block count using cassette parser — handles both LN and NL formats
+        const lines      = text.split('\n');
+        const blockCount = lines.filter(l => Cassette.parseBlockLine(l) !== null).length;
+        document.getElementById('block-count').textContent = `${blockCount} block${blockCount !== 1 ? 's' : ''}`;
 
-        const result = Cassette.findLastBlock(ta);
+        // Next block preview using cassette's own nextPrefix (handles both formats)
+        const result  = Cassette.findLastBlock(ta);
         const preview = document.getElementById('next-block-preview');
         if (result) {
-            const { parsed } = result;
-            const sep = parsed.separator.trim() || parsed.separator;
-            preview.textContent = `Next: ${parsed.letter}${parsed.number + 1}${sep}`;
+            preview.textContent = `Next: ${Cassette.nextPrefix(result.parsed)}`;
         } else {
             preview.textContent = '';
         }
@@ -519,7 +531,8 @@ const App = (() => {
     }
 
     // Check if the gross appears complete (no unfilled placeholders remain)
-    // and update the Submit Case button state accordingly
+    // and update the Submit Case button state accordingly.
+    // Auto-copies to clipboard when all fields are filled.
     function checkCompletion() {
         const text = document.getElementById('dictation').value;
         const hasUnfilled = /\[[^\]]{0,60}\]/.test(text); // any [...] remaining
@@ -535,11 +548,63 @@ const App = (() => {
                     ? 'Unfilled fields remain (shown in brackets)'
                     : 'Add content before submitting';
         }
+
+        // Auto-copy to clipboard when all fields are filled (debounced)
+        if (complete && !_autoCopied) {
+            clearTimeout(_autoCopyTimer);
+            _autoCopyTimer = setTimeout(() => {
+                const t = document.getElementById('dictation').value;
+                if (!/\[[^\]]{0,60}\]/.test(t) && t.trim().length > 50) {
+                    navigator.clipboard?.writeText(t).then(() => {
+                        _autoCopied = true;
+                        toast('All fields complete \u2014 copied to clipboard \u2713', 'green');
+                    }).catch(() => {});
+                }
+            }, 800);
+        } else if (!complete) {
+            _autoCopied = false;
+            clearTimeout(_autoCopyTimer);
+        }
+    }
+
+    // ── Undo history (snapshot-based) ────────────────────────────────────────
+
+    const _undoStack  = [];
+    const _MAX_UNDO   = 40;
+    let   _preInputState = null; // captured by beforeinput, used by cassette:advance
+
+    function pushUndo(label, text, sel) {
+        const ta = document.getElementById('dictation');
+        const t  = text !== undefined ? text : ta.value;
+        const s  = sel  !== undefined ? sel  : { s: ta.selectionStart, e: ta.selectionEnd };
+        // Don't push duplicate state
+        if (_undoStack.length > 0 && _undoStack[_undoStack.length - 1].text === t) return;
+        _undoStack.push({ text: t, selStart: s.s, selEnd: s.e, label });
+        if (_undoStack.length > _MAX_UNDO) _undoStack.shift();
+    }
+
+    function popUndo() {
+        if (_undoStack.length === 0) { toast('Nothing to undo', ''); return false; }
+        const snap = _undoStack.pop();
+        const ta   = document.getElementById('dictation');
+        ta.value          = snap.text;
+        ta.selectionStart = snap.selStart;
+        ta.selectionEnd   = snap.selEnd;
+        ta.focus();
+        // Update UI directly — do NOT dispatch input event (would re-trigger cassette)
+        updateFooter();
+        updateBlockMap();
+        scanTermUsage();
+        checkCompletion();
+        refreshFieldCounter();
+        toast(`Undo: ${snap.label || 'change'}`, '');
+        return true;
     }
 
     // ── Cassette button handlers ──────────────────────────────────────────────
     function newBlock() {
         const ta = document.getElementById('dictation');
+        pushUndo('block insert');
         Cassette.handleNewBlock(ta);
         updateFooter();
         updateBlockMap();
@@ -547,18 +612,14 @@ const App = (() => {
 
     function newSpecimen() {
         const ta = document.getElementById('dictation');
+        pushUndo('specimen insert');
         Cassette.handleNewSpecimen(ta);
         updateFooter();
         updateBlockMap();
     }
 
     function undoInsert() {
-        const ta = document.getElementById('dictation');
-        if (Cassette.handleUndo(ta)) {
-            toast('Undone', 'blue');
-            updateFooter();
-            updateBlockMap();
-        }
+        popUndo();
     }
 
     // ── Case submission ───────────────────────────────────────────────────────
@@ -621,6 +682,13 @@ const App = (() => {
         state.termsShown  = [];
         state.termsUsed   = [];
         state.submitted   = false;
+
+        // Reset undo stack, auto-copy guard, and pending template
+        _undoStack.length   = 0;
+        _autoCopied         = false;
+        clearTimeout(_autoCopyTimer);
+        _pendingRawTemplate = null;
+        try { localStorage.removeItem('grossapp-pending-template'); } catch {}
 
         // Reset field tracking
         fieldAdv.anchor    = -1;
@@ -687,6 +755,110 @@ const App = (() => {
         const next = state.format === Cassette.FORMAT_NL ? Cassette.FORMAT_LN : Cassette.FORMAT_NL;
         applyFormat(next);
         toast(`Format: ${next === Cassette.FORMAT_NL ? '1A 1B 1C…' : 'A1 A2 A3…'}`, 'blue');
+    }
+
+    // ── Clipboard / Paste ─────────────────────────────────────────────────────
+
+    let _clipText        = '';      // last clipboard text read
+    let _clipHasTemplate = false;   // whether it contains [...] fields
+    let _clipPoller      = null;
+    let _autoCopied      = false;   // guard for auto-copy-on-complete
+    let _autoCopyTimer   = null;
+    let _pendingRawTemplate = null; // raw (unfilled) template saved on paste
+
+    function updatePasteBtn() {
+        const btn = document.getElementById('btn-paste');
+        if (!btn) return;
+        btn.classList.toggle('has-template', _clipHasTemplate);
+        btn.title = _clipHasTemplate
+            ? 'Template detected in clipboard \u2014 click to paste (replaces all text)'
+            : 'Paste from clipboard (replaces all text)';
+    }
+
+    async function startClipboardPolling() {
+        if (!navigator.clipboard?.readText) return;
+        async function poll() {
+            try {
+                const text = await navigator.clipboard.readText();
+                if (text !== _clipText) {
+                    _clipText        = text;
+                    _clipHasTemplate = text.length > 20 && /\[[^\]]{0,60}\]/.test(text);
+                    updatePasteBtn();
+                }
+            } catch { /* no focus or permission denied */ }
+        }
+        try {
+            const perm = await navigator.permissions.query({ name: 'clipboard-read' });
+            if (perm.state === 'denied') return;
+            perm.addEventListener('change', () => {
+                if (perm.state === 'denied') {
+                    clearInterval(_clipPoller); _clipPoller = null;
+                } else if (!_clipPoller) {
+                    poll(); _clipPoller = setInterval(poll, 2000);
+                }
+            });
+        } catch { /* Firefox: no clipboard-read in permissions API — fall through */ }
+        poll();
+        _clipPoller = setInterval(poll, 2000);
+    }
+
+    async function pasteFromClipboard() {
+        let text = _clipText;
+        if (!text) {
+            try { text = await navigator.clipboard.readText(); } catch {
+                toast('Clipboard not accessible', ''); return;
+            }
+        }
+        if (!text.trim()) { toast('Clipboard is empty', ''); return; }
+
+        const ta = document.getElementById('dictation');
+        pushUndo('clipboard paste'); // save current state so Undo can reverse
+
+        ta.value = text;
+        ta.selectionStart = ta.selectionEnd = 0;
+        ta.focus();
+
+        // Save raw template immediately (before any edits)
+        if (/\[[^\]]{0,60}\]/.test(text)) {
+            _pendingRawTemplate = text;
+            try { localStorage.setItem('grossapp-pending-template', text); } catch {}
+        }
+
+        // Reset field tracking
+        fieldAdv.anchor = -1;
+        clearTimeout(fieldAdv.timer);
+
+        // Update UI without triggering cassette auto-advance
+        updateFooter();
+        updateBlockMap();
+        scanTermUsage();
+        checkCompletion();
+        refreshFieldCounter();
+
+        _clipHasTemplate = false;
+        updatePasteBtn();
+        toast('Pasted from clipboard', 'blue');
+        detectFromPaste();
+    }
+
+    async function maybeSavePendingTemplate() {
+        if (!state.specimen) return;
+        if (!_pendingRawTemplate) {
+            try { _pendingRawTemplate = localStorage.getItem('grossapp-pending-template') || null; } catch {}
+        }
+        if (!_pendingRawTemplate) return;
+
+        const raw = _pendingRawTemplate;
+        _pendingRawTemplate = null;
+        try { localStorage.removeItem('grossapp-pending-template'); } catch {}
+
+        try {
+            const result = await API.templates.submit(state.specimen.id, raw);
+            state.template_id = result.id;
+            toast(result.new
+                ? `Template saved (${result.placeholders?.length ?? 0} fields detected)`
+                : `Template recognised`, 'blue');
+        } catch {}
     }
 
     // ── Field advancement ─────────────────────────────────────────────────────
@@ -771,6 +943,39 @@ const App = (() => {
         // Next field at or after `from`, wrap around if needed
         let target = fields.find(f => f.start >= from);
         if (!target) target = fields[0];
+
+        ta.setSelectionRange(target.start, target.end);
+        ta.focus();
+
+        fieldAdv.anchor    = target.start;
+        fieldAdv.watchBack = false;
+        clearTimeout(fieldAdv.timer);
+
+        const idx = fields.indexOf(target) + 1;
+        updateFieldCounter(idx, fields.length);
+        return true;
+    }
+
+    // Navigate to the previous [...] field, wrapping around if at the first one.
+    function goPrevField(fromPos) {
+        const ta     = document.getElementById('dictation');
+        const text   = ta.value;
+        const from   = fromPos !== undefined ? fromPos : ta.selectionStart;
+        const fields = findAllFields(text);
+
+        if (fields.length === 0) {
+            toast('No fields remaining', '');
+            fieldAdv.anchor = -1;
+            updateFieldCounter(0, 0);
+            return false;
+        }
+
+        // Last field that starts strictly before `from`; wrap to last if none
+        let target = null;
+        for (let i = fields.length - 1; i >= 0; i--) {
+            if (fields[i].start < from - 1) { target = fields[i]; break; }
+        }
+        if (!target) target = fields[fields.length - 1];
 
         ta.setSelectionRange(target.start, target.end);
         ta.focus();
@@ -963,7 +1168,8 @@ const App = (() => {
         submitCase, copyToClipboard, clearAll,
         toggleSection, detectFromPaste,
         toggleTheme, toggleFormat,
-        goToNextField, toggleAutoAdvance, toggleFieldPrefs
+        goToNextField, goPrevField, toggleAutoAdvance, toggleFieldPrefs,
+        pasteFromClipboard
     };
 
 })();

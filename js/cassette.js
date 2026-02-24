@@ -580,7 +580,8 @@ const Cassette = (() => {
         findLastBlock,
         buildBlockMap,
         inferSpecimenFromText,
-        nextLetterSuffix  // exported for testing
+        nextLetterSuffix,  // exported for testing
+        nextPrefix         // exported for next-block preview
     };
 
 })();
