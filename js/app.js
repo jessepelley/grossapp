@@ -8,23 +8,31 @@ const App = (() => {
 
     // ── State ─────────────────────────────────────────────────────────────────
     const state = {
-        specimen:    null,   // { id, name }
-        histories:   [],     // [{ id, label, is_primary }]
+        specimen:    null,
+        histories:   [],
         template_id: null,
-        termsShown:  [],     // terms displayed in word cloud this session
-        termsUsed:   [],     // terms detected as used in gross text
+        termsShown:  [],
+        termsUsed:   [],
         sections:    { cloud: true, blocks: true, controls: true },
-        submitted:   false   // guard against duplicate submissions
+        submitted:   false,
+        theme:       'light',   // 'light' | 'dark'
+        format:      'letter-number' // 'letter-number' | 'number-letter'
     };
 
     // ── Init ──────────────────────────────────────────────────────────────────
     function init() {
         const ta = document.getElementById('dictation');
 
+        // Apply saved preferences
+        const savedTheme  = localStorage.getItem('grossapp-theme')  || 'light';
+        const savedFormat = localStorage.getItem('grossapp-format') || 'letter-number';
+        applyTheme(savedTheme);
+        applyFormat(savedFormat);
+
         // Cassette automation
         Cassette.init(ta);
         ta.addEventListener('cassette:advance', (e) => {
-            toast(`${e.detail.letter}${e.detail.from} → ${e.detail.letter}${e.detail.to}`, 'blue');
+            toast(`Block: ${e.detail.prefix}`, 'blue');
             updateFooter();
             updateBlockMap();
         });
@@ -566,6 +574,36 @@ const App = (() => {
         toastTimer = setTimeout(() => { el.className = ''; }, 2000);
     }
 
+    // ── Theme toggle ──────────────────────────────────────────────────────────
+    function applyTheme(theme) {
+        state.theme = theme;
+        document.documentElement.setAttribute('data-theme', theme);
+        const btn = document.getElementById('btn-theme');
+        if (btn) btn.textContent = theme === 'dark' ? '☾ Dark' : '☀ Light';
+        localStorage.setItem('grossapp-theme', theme);
+    }
+
+    function toggleTheme() {
+        applyTheme(state.theme === 'light' ? 'dark' : 'light');
+    }
+
+    // ── Format toggle ─────────────────────────────────────────────────────────
+    function applyFormat(fmt) {
+        state.format = fmt;
+        Cassette.setFormat(fmt);
+        const btn = document.getElementById('btn-format');
+        if (btn) btn.textContent = fmt === Cassette.FORMAT_NL ? 'Format: 1A' : 'Format: A1';
+        localStorage.setItem('grossapp-format', fmt);
+        updateFooter();
+        updateBlockMap();
+    }
+
+    function toggleFormat() {
+        const next = state.format === Cassette.FORMAT_NL ? Cassette.FORMAT_LN : Cassette.FORMAT_NL;
+        applyFormat(next);
+        toast(`Format: ${next === Cassette.FORMAT_NL ? '1A 1B 1C…' : 'A1 A2 A3…'}`, 'blue');
+    }
+
     // ── Bootstrap ─────────────────────────────────────────────────────────────
     document.addEventListener('DOMContentLoaded', init);
 
@@ -573,7 +611,8 @@ const App = (() => {
     return {
         newBlock, newSpecimen, undoInsert,
         submitCase, copyToClipboard, clearAll,
-        toggleSection, detectFromPaste
+        toggleSection, detectFromPaste,
+        toggleTheme, toggleFormat
     };
 
 })();

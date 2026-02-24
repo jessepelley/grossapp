@@ -1,103 +1,201 @@
 /**
- * cassette.js
- * Cassette key automation for gross pathology dictation
+ * cassette.js  v1.9
+ * Cassette key automation for gross pathology dictation.
  *
- * Trigger model:
- *   - Dragon Medical One handles "new line" internally as Enter
- *   - Auto-increment fires on the first input event on a new empty line
- *     whose previous non-empty line is a cassette block or range entry
- *   - Range detection: A5-A10 or A5-10 → next block is A11
- *   - Indented sub-lines (e.g. "    A10-deepest invasion") are parsed for
- *     the block map but do NOT drive the counter — the range end governs
- *   - Manual buttons and undo are also supported
+ * Supports two block formats (toggled via Cassette.setFormat):
+ *
+ *   FORMAT "letter-number" (default):  A1, A2 … A26, A27 … B1, B2 …
+ *   FORMAT "number-letter":            1A, 1B … 1Z, 1AA, 1AB … 1AZ, 1BA …
+ *                                      2A, 2B … (specimen 2)
+ *
+ * Triggers:
+ *   1. DMO "New Line" — fires a generic input event on the new empty line.
+ *      Detected by checking if the current line is empty after an input event.
+ *   2. First character typed on a new line (keyboard Enter fallback).
+ *   3. selectionchange — when DMO "Next Field" selects [___], auto-fills.
+ *   4. +Block / +Specimen / ↩ Undo buttons.
  */
 
 const Cassette = (() => {
 
-    // Standard cassette line: A1-  A12\t  B3:  C20–
-    const BLOCK_PATTERN = /^([A-Z])(\d+)([\t\-\u2013\u2014]|:\s?|\s)/;
+    // ── Format definitions ────────────────────────────────────────────────────
 
-    // Range line formats:
-    //   A5-A10-tumor    (full: explicit end letter)
-    //   A5-10-tumor     (short: end letter implied, same as start)
-    // The separator AFTER the end block must be dash/en-dash/em-dash/tab/colon/space
-    const RANGE_PATTERN = /^([A-Z])(\d+)[-\u2013\u2014]([A-Z])?(\d+)([\t\-\u2013\u2014]|:\s?|\s)/;
+    const FORMAT_LN = 'letter-number'; // A1, B3, C20
+    const FORMAT_NL = 'number-letter'; // 1A, 2B, 1AA
 
-    // Indented sub-line (leading whitespace): "    A10-deepest invasion"
-    const INDENTED_PATTERN = /^([\s\t]+)([A-Z])(\d+)([\t\-\u2013\u2014]|:\s?|\s)/;
+    let _format = FORMAT_LN;
+
+    function setFormat(fmt) {
+        _format = fmt === FORMAT_NL ? FORMAT_NL : FORMAT_LN;
+    }
+    function getFormat() { return _format; }
+
+    // ── Patterns ──────────────────────────────────────────────────────────────
+
+    // Letter-Number: A1-  A12\t  B3:  C20–
+    const BLOCK_LN = /^([A-Z])(\d+)([\t\-\u2013\u2014]|:\s?|\s)/;
+
+    // Letter-Number range: A5-A10-  or  A5-10-
+    const RANGE_LN = /^([A-Z])(\d+)[-\u2013\u2014]([A-Z])?(\d+)([\t\-\u2013\u2014]|:\s?|\s)/;
+
+    // Number-Letter: 1A-  2B\t  1AA:  2AZ–
+    const BLOCK_NL = /^(\d+)([A-Z]{1,2})([\t\-\u2013\u2014]|:\s?|\s)/;
+
+    // Number-Letter range: 1A-1C-  or  1A-C-
+    const RANGE_NL = /^(\d+)([A-Z]{1,2})[-\u2013\u2014](\d+)?([A-Z]{1,2})([\t\-\u2013\u2014]|:\s?|\s)/;
+
+    // Indented sub-line (leading whitespace)
+    const INDENTED_LN = /^([\s\t]+)([A-Z])(\d+)([\t\-\u2013\u2014]|:\s?|\s)/;
+    const INDENTED_NL = /^([\s\t]+)(\d+)([A-Z]{1,2})([\t\-\u2013\u2014]|:\s?|\s)/;
+
+    // Placeholder at start of line: [___]-  [   ]-  [ ]-
+    const PLACEHOLDER_LINE_PATTERN = /^(\[[\s_]*\])([\t\-\u2013\u2014]|:\s?|\s)/;
 
     // Specimen header: "B. The specimen is received"
     const SPECIMEN_HEADER_PATTERN = /^([A-Z])\.\s+[Tt]he specimen is received/;
 
-    let lastAutoInsert = null;
-    let _textarea      = null;
-    let _ignoreNext    = false;
-
-    // ── Parsing ────────────────────────────────────────────────────────────────
+    // ── Number-Letter helpers ─────────────────────────────────────────────────
 
     /**
-     * Parse a line and return the effective LAST block it represents.
-     *
-     * Simple line  "A4-appendix"   → { letter:'A', number:4,  isRange:false, ... }
-     * Range line   "A5-A10-tumor"  → { letter:'A', number:10, isRange:true, rangeStart:5 }
-     * Range line   "A5-10-tumor"   → { letter:'A', number:10, isRange:true, rangeStart:5 }
+     * Increment a letter suffix: A→B, Z→AA, AZ→BA, ZZ→AAA
+     */
+    function nextLetterSuffix(letters) {
+        const arr = letters.split('');
+        let i = arr.length - 1;
+        while (i >= 0) {
+            if (arr[i] < 'Z') {
+                arr[i] = String.fromCharCode(arr[i].charCodeAt(0) + 1);
+                return arr.join('');
+            }
+            arr[i] = 'A';
+            i--;
+        }
+        return 'A' + arr.join(''); // overflow: Z→AA, ZZ→AAA
+    }
+
+    // ── Parsing ───────────────────────────────────────────────────────────────
+
+    /**
+     * Parse a cassette line in either format.
+     * Returns { specimen, suffix, separator, raw, isRange, rangeStart, startSuffix }
+     * where for LN: specimen=letter, suffix=number string
+     *       for NL: specimen=number string, suffix=letter string
      * Returns null if not a cassette line.
      */
     function parseBlockLine(line) {
         const t = line.trimEnd();
 
-        // Range pattern takes priority (more specific)
-        const rm = t.match(RANGE_PATTERN);
+        if (_format === FORMAT_NL) {
+            // Range first
+            const rr = t.match(RANGE_NL);
+            if (rr) {
+                const specNum    = rr[1];
+                const startSuf   = rr[2];
+                const endSpecNum = rr[3] || specNum;
+                const endSuf     = rr[4];
+                const sep        = rr[5];
+                return {
+                    specimen:    endSpecNum,
+                    suffix:      endSuf,
+                    separator:   sep,
+                    raw:         rr[0],
+                    isRange:     true,
+                    rangeStart:  startSuf,
+                    startSuffix: startSuf,
+                    startSpec:   specNum
+                };
+            }
+            const br = t.match(BLOCK_NL);
+            if (br) {
+                return {
+                    specimen:  br[1],
+                    suffix:    br[2],
+                    separator: br[3],
+                    raw:       br[0],
+                    isRange:   false
+                };
+            }
+            return null;
+        }
+
+        // FORMAT_LN
+        const rm = t.match(RANGE_LN);
         if (rm) {
             const startLetter = rm[1];
             const startNum    = parseInt(rm[2], 10);
-            const endLetter   = rm[3] || startLetter; // omitted = same letter
+            const endLetter   = rm[3] || startLetter;
             const endNum      = parseInt(rm[4], 10);
             const sep         = rm[5];
-            // Sanity: end must be >= start
             if (endNum < startNum && endLetter === startLetter) return null;
             return {
-                letter:      endLetter,
-                number:      endNum,
+                specimen:    endLetter,   // reuse field name for letter
+                suffix:      endNum,      // reuse field name for number
                 separator:   sep,
                 raw:         rm[0],
                 isRange:     true,
                 rangeStart:  startNum,
-                startLetter: startLetter
+                startLetter: startLetter,
+                // Legacy fields for LN compat
+                letter:      endLetter,
+                number:      endNum
             };
         }
 
-        // Standard single block
-        const bm = t.match(BLOCK_PATTERN);
+        const bm = t.match(BLOCK_LN);
         if (bm) {
             return {
-                letter:    bm[1],
-                number:    parseInt(bm[2], 10),
+                specimen:  bm[1],
+                suffix:    parseInt(bm[2], 10),
                 separator: bm[3],
                 raw:       bm[0],
-                isRange:   false
+                isRange:   false,
+                letter:    bm[1],
+                number:    parseInt(bm[2], 10)
             };
         }
 
         return null;
     }
 
-    /**
-     * Parse an indented sub-line for block map display.
-     * Does NOT drive the auto-increment counter.
-     */
     function parseIndentedLine(line) {
-        const m = line.match(INDENTED_PATTERN);
+        const pattern = _format === FORMAT_NL ? INDENTED_NL : INDENTED_LN;
+        const m = line.match(pattern);
         if (!m) return null;
-        return {
-            indent:    m[1],
-            letter:    m[2],
-            number:    parseInt(m[3], 10),
-            separator: m[4]
-        };
+        return _format === FORMAT_NL
+            ? { indent: m[1], specimen: m[2], suffix: m[3], separator: m[4] }
+            : { indent: m[1], specimen: m[2], suffix: parseInt(m[3],10), separator: m[4] };
     }
 
-    // Previous non-empty line above cursor
+    /**
+     * Given a parsed block, return the prefix string for the NEXT block.
+     * LN: A4 → A5-  (or whatever separator)
+     * NL: 1D → 1E-  /  1Z → 1AA-  /  1AZ → 1BA-
+     */
+    function nextPrefix(parsed, overrideSep) {
+        const sep = normalizeSeparator(overrideSep || parsed.separator);
+        if (_format === FORMAT_NL) {
+            const nextSuf = nextLetterSuffix(parsed.suffix);
+            return `${parsed.specimen}${nextSuf}${sep}`;
+        }
+        // FORMAT_LN
+        return `${parsed.letter}${parsed.number + 1}${sep}`;
+    }
+
+    /**
+     * Next specimen prefix — LN: B1  NL: 2A
+     */
+    function nextSpecimenPrefix(parsed, overrideSep) {
+        const sep = normalizeSeparator(overrideSep || parsed.separator);
+        if (_format === FORMAT_NL) {
+            const nextSpec = String(parseInt(parsed.specimen, 10) + 1);
+            return `${nextSpec}A${sep}`;
+        }
+        const nextLetter = String.fromCharCode(parsed.letter.charCodeAt(0) + 1);
+        return `${nextLetter}1${sep}`;
+    }
+
+    // ── Cursor helpers ────────────────────────────────────────────────────────
+
     function getPreviousNonEmptyLine(textarea) {
         const text  = textarea.value;
         const pos   = textarea.selectionStart;
@@ -108,17 +206,24 @@ const Cassette = (() => {
         return null;
     }
 
-    // True if cursor is on a line with exactly 1 character (fresh line after Enter)
+    function cursorIsOnEmptyLine(textarea) {
+        const text      = textarea.value;
+        const pos       = textarea.selectionStart;
+        const lineStart = text.lastIndexOf('\n', pos - 1) + 1;
+        const lineEnd   = text.indexOf('\n', pos);
+        const line      = text.substring(lineStart, lineEnd === -1 ? text.length : lineEnd);
+        return line.trim() === '';
+    }
+
     function cursorIsOnFreshLine(textarea) {
         const text      = textarea.value;
         const pos       = textarea.selectionStart;
         const lineStart = text.lastIndexOf('\n', pos - 1) + 1;
         const lineEnd   = text.indexOf('\n', pos);
         const line      = text.substring(lineStart, lineEnd === -1 ? text.length : lineEnd);
-        return line.length === 1;
+        return line.length === 1; // exactly one char just typed
     }
 
-    // Scan full text for specimen header lines, return last detected letter
     function inferSpecimenFromText(text) {
         let letter = null;
         for (const line of text.split('\n')) {
@@ -129,10 +234,8 @@ const Cassette = (() => {
     }
 
     /**
-     * Find the last effective cassette block above a given position in the textarea.
+     * Find last effective cassette block above upToPos.
      * Skips indented sub-lines and placeholder lines.
-     * @param {HTMLTextAreaElement} textarea
-     * @param {number} [upToPos] - search limit; defaults to selectionStart
      */
     function findLastBlock(textarea, upToPos) {
         const pos   = upToPos !== undefined ? upToPos : textarea.selectionStart;
@@ -140,15 +243,15 @@ const Cassette = (() => {
         const lines = text.split('\n');
         for (let i = lines.length - 1; i >= 0; i--) {
             const line = lines[i];
-            if (/^[\s\t]/.test(line)) continue;          // skip indented sub-lines
-            if (PLACEHOLDER_LINE_PATTERN.test(line)) continue; // skip placeholder lines
+            if (/^[\s\t]/.test(line)) continue;
+            if (PLACEHOLDER_LINE_PATTERN.test(line)) continue;
             const parsed = parseBlockLine(line);
             if (parsed) return { parsed, lineIndex: i };
         }
         return null;
     }
 
-    // ── Separator helpers ───────────────────────────────────────────────────────
+    // ── Separator helpers ─────────────────────────────────────────────────────
 
     function normalizeSeparator(sep) {
         if (!sep) return '-';
@@ -156,50 +259,8 @@ const Cassette = (() => {
         return sep;
     }
 
-    function buildPrefix(letter, number, separator) {
-        return `${letter}${number}${separator}`;
-    }
+    // ── Placeholder detection ─────────────────────────────────────────────────
 
-    // ── Placeholder detection ───────────────────────────────────────────────────
-
-    // Matches a cassette placeholder at the start of a line:
-    //   [   ]-[description]   or   [___]-[description]   or   [___]-description
-    const PLACEHOLDER_LINE_PATTERN = /^(\[[\s_]*\])([\t\-\u2013\u2014]|:\s?|\s)/;
-
-    /**
-     * Check if the current line OR the line containing selectionEnd starts with
-     * a cassette placeholder. Handles the case where [___] is selected/highlighted
-     * — clicking a button moves selectionStart but we save it before the click.
-     *
-     * Also checks _savedSelection set by the mousedown handler.
-     */
-    function getPlaceholderOnCurrentLine(textarea) {
-        // Try saved selection first (set on mousedown before focus is lost)
-        const positions = [];
-        if (_savedSelection !== null) positions.push(_savedSelection);
-        positions.push(textarea.selectionStart);
-        positions.push(textarea.selectionEnd);
-
-        const text = textarea.value;
-
-        for (const pos of positions) {
-            const lineStart = text.lastIndexOf('\n', pos - 1) + 1;
-            const lineEnd   = text.indexOf('\n', pos);
-            const line      = text.substring(lineStart, lineEnd === -1 ? text.length : lineEnd);
-            const m         = line.match(PLACEHOLDER_LINE_PATTERN);
-            if (m) {
-                return {
-                    lineStart,
-                    matchLength: m[0].length,
-                    separator:   m[2]
-                };
-            }
-        }
-        return null;
-    }
-
-    // Saved cursor position — captured on textarea mousedown/keyup
-    // so button clicks don't lose the selection
     let _savedSelection = null;
 
     function saveSelection(textarea) {
@@ -210,7 +271,24 @@ const Cassette = (() => {
         _savedSelection = null;
     }
 
-    // ── Core insertion ──────────────────────────────────────────────────────────
+    function getPlaceholderOnCurrentLine(textarea) {
+        const positions = [];
+        if (_savedSelection !== null) positions.push(_savedSelection);
+        positions.push(textarea.selectionStart);
+        positions.push(textarea.selectionEnd);
+
+        const text = textarea.value;
+        for (const pos of positions) {
+            const lineStart = text.lastIndexOf('\n', pos - 1) + 1;
+            const lineEnd   = text.indexOf('\n', pos);
+            const line      = text.substring(lineStart, lineEnd === -1 ? text.length : lineEnd);
+            const m         = line.match(PLACEHOLDER_LINE_PATTERN);
+            if (m) return { lineStart, matchLength: m[0].length, separator: m[2] };
+        }
+        return null;
+    }
+
+    // ── Core insertion ────────────────────────────────────────────────────────
 
     function insertAtCursor(textarea, text) {
         const start  = textarea.selectionStart;
@@ -235,11 +313,6 @@ const Cassette = (() => {
         textarea.focus();
     }
 
-    /**
-     * Replace a placeholder at the start of the current line with the next block prefix.
-     * e.g. "[   ]-[description]" → "A8-[description]"
-     * Cursor ends up just after the new prefix, ready to dictate.
-     */
     function replacePlaceholderWithBlock(textarea, prefix, ph) {
         const text   = textarea.value;
         const before = text.substring(0, ph.lineStart);
@@ -251,37 +324,42 @@ const Cassette = (() => {
         textarea.dispatchEvent(new Event('input', { bubbles: true }));
     }
 
-    // ── Public actions ──────────────────────────────────────────────────────────
+    // ── dispatchAdvance helper ────────────────────────────────────────────────
+
+    function dispatchAdvance(textarea, parsed, prefix, extra = {}) {
+        textarea.dispatchEvent(new CustomEvent('cassette:advance', {
+            bubbles: true,
+            detail: {
+                // LN compat fields
+                letter: parsed.letter || parsed.specimen,
+                from:   parsed.number !== undefined ? parsed.number : parsed.suffix,
+                to:     parsed.number !== undefined ? parsed.number + 1 : nextLetterSuffix(parsed.suffix),
+                prefix,
+                ...extra
+            }
+        }));
+    }
+
+    // ── Public actions ────────────────────────────────────────────────────────
 
     function handleNewBlock(textarea) {
-        // Check if cursor is on a placeholder line — fill it in-place if so
         const ph = getPlaceholderOnCurrentLine(textarea);
         if (ph) {
-            // Search for last block strictly ABOVE this line
             const result = findLastBlock(textarea, ph.lineStart);
             if (!result) return false;
-            const { parsed } = result;
-            const sep    = normalizeSeparator(ph.separator);
-            const prefix = buildPrefix(parsed.letter, parsed.number + 1, sep);
+            const prefix = nextPrefix(result.parsed, ph.separator);
             _ignoreNext  = true;
             clearSavedSelection();
             replacePlaceholderWithBlock(textarea, prefix, ph);
             lastAutoInsert = { inserted: prefix, length: prefix.length, wasPlaceholder: true };
-            textarea.dispatchEvent(new CustomEvent('cassette:advance', {
-                bubbles: true,
-                detail: { letter: parsed.letter, from: parsed.number, to: parsed.number + 1, prefix, wasPlaceholder: true }
-            }));
+            dispatchAdvance(textarea, result.parsed, prefix, { wasPlaceholder: true });
             return true;
         }
 
-        clearSavedSelection();
-
-        // Standard case — append new block on next line
         const result = findLastBlock(textarea);
         if (!result) return false;
-        const { parsed } = result;
-        const sep    = normalizeSeparator(parsed.separator);
-        const prefix = buildPrefix(parsed.letter, parsed.number + 1, sep);
+        const prefix = nextPrefix(result.parsed);
+        clearSavedSelection();
         _ignoreNext  = true;
         insertAtCursor(textarea, '\n' + prefix);
         lastAutoInsert = { inserted: '\n' + prefix, length: ('\n' + prefix).length };
@@ -291,13 +369,10 @@ const Cassette = (() => {
     function handleNewSpecimen(textarea) {
         const result = findLastBlock(textarea);
         if (!result) return false;
-        const { parsed }  = result;
-        const sep         = normalizeSeparator(parsed.separator);
-        const nextLetter  = String.fromCharCode(parsed.letter.charCodeAt(0) + 1);
-        const prefix      = buildPrefix(nextLetter, 1, sep);
-        _ignoreNext       = true;
+        const prefix  = nextSpecimenPrefix(result.parsed);
+        _ignoreNext   = true;
         insertAtCursor(textarea, '\n' + prefix);
-        lastAutoInsert    = { inserted: '\n' + prefix, length: ('\n' + prefix).length };
+        lastAutoInsert = { inserted: '\n' + prefix, length: ('\n' + prefix).length };
         return true;
     }
 
@@ -316,7 +391,25 @@ const Cassette = (() => {
         return false;
     }
 
-    // ── Auto-trigger on input ───────────────────────────────────────────────────
+    // ── Auto-trigger on input ─────────────────────────────────────────────────
+
+    let lastAutoInsert = null;
+    let _ignoreNext    = false;
+    let _textarea      = null;
+
+    function tryAutoAdvance(textarea) {
+        const result = findLastBlock(textarea);
+        if (!result) return false;
+
+        const { parsed } = result;
+        const prefix = nextPrefix(parsed);
+
+        _ignoreNext = true;
+        prependToCurrentLine(textarea, prefix);
+        lastAutoInsert = { inserted: prefix, length: prefix.length };
+        dispatchAdvance(textarea, parsed, prefix, { wasRange: parsed.isRange || false });
+        return true;
+    }
 
     function onInput(e) {
         const textarea = e.target;
@@ -326,95 +419,108 @@ const Cassette = (() => {
             return;
         }
 
-        // ── Case 1: first character typed on a fresh line after Enter ───────────
-        if (cursorIsOnFreshLine(textarea)) {
-            const result = findLastBlock(textarea);
-            if (!result) return;
-
-            const { parsed } = result;
-            const sep    = normalizeSeparator(parsed.separator);
-            const prefix = buildPrefix(parsed.letter, parsed.number + 1, sep);
-
-            _ignoreNext = true;
-            prependToCurrentLine(textarea, prefix);
-
-            lastAutoInsert = { inserted: prefix, length: prefix.length };
-
-            textarea.dispatchEvent(new CustomEvent('cassette:advance', {
-                bubbles: true,
-                detail: {
-                    letter:   parsed.letter,
-                    from:     parsed.number,
-                    to:       parsed.number + 1,
-                    prefix,
-                    wasRange: parsed.isRange || false
-                }
-            }));
-            return;
-        }
-
-        // ── Case 2: first character typed on a placeholder line ─────────────────
-        // Detect lines that start with [   ] or [___] and now have one extra char
-        // (meaning the user just started typing into what was a placeholder line)
         const text      = textarea.value;
         const pos       = textarea.selectionStart;
         const lineStart = text.lastIndexOf('\n', pos - 1) + 1;
         const lineEnd   = text.indexOf('\n', pos);
         const line      = text.substring(lineStart, lineEnd === -1 ? text.length : lineEnd);
 
-        // Line should match: one extra char + rest of placeholder line
-        // i.e. line is something like "x[   ]-[description]" — char typed before bracket
-        // Actually DMO lands cursor at start, so we check if without first char it's a placeholder
+        // ── Case 1: DMO "New Line" or keyboard Enter ───────────────────────────
+        // DMO fires input with the cursor on a now-empty line.
+        // Keyboard fires input after first character, so line.length === 1.
+        // Both cases: previous non-empty line must be a cassette block.
+        if (line.trim() === '' || line.length === 1) {
+            const prevLine = getPreviousNonEmptyLine(textarea);
+            if (!prevLine) return;
+            if (!parseBlockLine(prevLine)) return;
+
+            if (line.trim() === '') {
+                // DMO empty line — fire immediately, no character to move
+                const result = findLastBlock(textarea);
+                if (!result) return;
+                const prefix = nextPrefix(result.parsed);
+                _ignoreNext  = true;
+                // Insert prefix at start of current empty line
+                const before = text.substring(0, lineStart);
+                const rest   = text.substring(lineStart);
+                textarea.value = before + prefix + rest;
+                textarea.selectionStart = textarea.selectionEnd = lineStart + prefix.length;
+                textarea.focus();
+                lastAutoInsert = { inserted: prefix, length: prefix.length };
+                dispatchAdvance(textarea, result.parsed, prefix);
+            } else {
+                // Keyboard: first char typed, prepend prefix before it
+                tryAutoAdvance(textarea);
+            }
+            return;
+        }
+
+        // ── Case 2: character typed at start of placeholder line ──────────────
         const lineWithoutFirst = line.substring(1);
-        if (lineWithoutFirst.match(PLACEHOLDER_LINE_PATTERN)) {
-            const result = findLastBlock(textarea);
+        const phm = lineWithoutFirst.match(PLACEHOLDER_LINE_PATTERN);
+        if (phm) {
+            const result = findLastBlock(textarea, lineStart);
             if (!result) return;
-            const { parsed } = result;
-            // Build next block using placeholder's separator
-            const phMatch = lineWithoutFirst.match(PLACEHOLDER_LINE_PATTERN);
-            const sep     = normalizeSeparator(phMatch[2]);
-            const prefix  = buildPrefix(parsed.letter, parsed.number + 1, sep);
-
-            // Replace the typed char + the placeholder bracket+separator with the prefix
-            const charTyped   = line[0];
-            const phLength    = 1 + phMatch[0].length; // typed char + "[   ]-"
-            const before      = text.substring(0, lineStart);
-            const rest        = text.substring(lineStart + phLength);
-            _ignoreNext       = true;
-            textarea.value    = before + prefix + rest;
-            const newPos      = lineStart + prefix.length;
-            textarea.selectionStart = textarea.selectionEnd = newPos;
+            const sep    = normalizeSeparator(phm[2]);
+            const prefix = nextPrefix(result.parsed, sep);
+            const before = text.substring(0, lineStart);
+            const rest   = text.substring(lineStart + 1 + phm[0].length);
+            _ignoreNext  = true;
+            textarea.value = before + prefix + rest;
+            textarea.selectionStart = textarea.selectionEnd = lineStart + prefix.length;
             textarea.focus();
-
             lastAutoInsert = { inserted: prefix, length: prefix.length };
-
-            textarea.dispatchEvent(new CustomEvent('cassette:advance', {
-                bubbles: true,
-                detail: {
-                    letter:          parsed.letter,
-                    from:            parsed.number,
-                    to:              parsed.number + 1,
-                    prefix,
-                    wasPlaceholder:  true
-                }
-            }));
+            dispatchAdvance(textarea, result.parsed, prefix, { wasPlaceholder: true });
         }
     }
 
+    // ── selectionchange: DMO "Next Field" selects [___] ───────────────────────
+
+    function autoFillPlaceholderIfSelected(textarea) {
+        const text  = textarea.value;
+        const start = textarea.selectionStart;
+        const end   = textarea.selectionEnd;
+
+        if (start === end) return;
+
+        // Selection must start with [ and end with ]
+        if (text[start] !== '[' || text[end - 1] !== ']') return;
+
+        const lineStart = text.lastIndexOf('\n', start - 1) + 1;
+        const lineEnd   = text.indexOf('\n', start);
+        const line      = text.substring(lineStart, lineEnd === -1 ? text.length : lineEnd);
+
+        const m = line.match(PLACEHOLDER_LINE_PATTERN);
+        if (!m) return;
+        if (text[lineStart] !== '[') return; // must be at line start
+
+        const ph     = { lineStart, matchLength: m[0].length, separator: m[2] };
+        const result = findLastBlock(textarea, lineStart);
+        if (!result) return;
+
+        const prefix = nextPrefix(result.parsed, ph.separator);
+        _ignoreNext  = true;
+        clearSavedSelection();
+        replacePlaceholderWithBlock(textarea, prefix, ph);
+        lastAutoInsert = { inserted: prefix, length: prefix.length, wasPlaceholder: true };
+        dispatchAdvance(textarea, result.parsed, prefix, { wasPlaceholder: true });
+    }
+
     // ── Block map builder ─────────────────────────────────────────────────────
-    // Returns array of { label, desc, indented, isRange } for all cassette lines
 
     function buildBlockMap(text) {
         const lines  = text.split('\n');
         const blocks = [];
 
         for (const line of lines) {
-            // Check indented first
             const ind = parseIndentedLine(line);
             if (ind) {
-                const prefixLen = ind.indent.length + `${ind.letter}${ind.number}${ind.separator}`.length;
+                const prefixLen = ind.indent.length +
+                    (_format === FORMAT_NL
+                        ? `${ind.specimen}${ind.suffix}${ind.separator}`
+                        : `${ind.specimen}${ind.suffix}${ind.separator}`).length;
                 blocks.push({
-                    label:    `  ${ind.letter}${ind.number}`,
+                    label:    `  ${ind.specimen}${ind.suffix}`,
                     desc:     line.substring(prefixLen).trim(),
                     indented: true,
                     isRange:  false
@@ -424,126 +530,57 @@ const Cassette = (() => {
 
             const parsed = parseBlockLine(line);
             if (!parsed) continue;
-
             const desc = line.substring(parsed.raw.length).trim();
 
             if (parsed.isRange) {
-                blocks.push({
-                    label:    `${parsed.startLetter}${parsed.rangeStart}–${parsed.letter}${parsed.number}`,
-                    desc,
-                    indented: false,
-                    isRange:  true
-                });
+                const startLabel = _format === FORMAT_NL
+                    ? `${parsed.startSpec}${parsed.startSuffix}`
+                    : `${parsed.startLetter}${parsed.rangeStart}`;
+                const endLabel = _format === FORMAT_NL
+                    ? `${parsed.specimen}${parsed.suffix}`
+                    : `${parsed.letter}${parsed.number}`;
+                blocks.push({ label: `${startLabel}–${endLabel}`, desc, indented: false, isRange: true });
             } else {
                 blocks.push({
-                    label:    `${parsed.letter}${parsed.number}`,
-                    desc,
-                    indented: false,
-                    isRange:  false
+                    label:    `${parsed.specimen}${parsed.suffix}`,
+                    desc, indented: false, isRange: false
                 });
             }
         }
         return blocks;
     }
 
-    // ── Init ────────────────────────────────────────────────────────────────────
+    // ── Init ──────────────────────────────────────────────────────────────────
 
     function init(textarea) {
         _textarea = textarea;
         textarea.addEventListener('input', onInput);
-
-        // Save cursor position continuously for button fallback
         textarea.addEventListener('keyup',   () => saveSelection(textarea));
         textarea.addEventListener('mouseup', () => saveSelection(textarea));
 
-        // Primary trigger: selectionchange fires when DMO's "Next Field"
-        // selects a bracket placeholder — works regardless of input method
         document.addEventListener('selectionchange', () => {
-            // Only act when this textarea is the active element
             if (document.activeElement !== textarea) return;
             saveSelection(textarea);
             autoFillPlaceholderIfSelected(textarea);
         });
     }
 
-    /**
-     * Fires when the selection changes (including DMO "Next Field" navigation).
-     * If the selected text looks like a bracket placeholder AND the line
-     * starts with [___] at the beginning, auto-fill with the next block label.
-     *
-     * DMO selects the content INSIDE the brackets e.g. "___" or "   "
-     * so we check if the character just before selectionStart is "[" 
-     * and just after selectionEnd is "]" to confirm it's a bracket selection.
-     */
-    function autoFillPlaceholderIfSelected(textarea) {
-        const text  = textarea.value;
-        const start = textarea.selectionStart;
-        const end   = textarea.selectionEnd;
-
-        // Must be an actual selection, not just a cursor position
-        if (start === end) return;
-
-        // Check if selection includes the surrounding brackets
-        // DMO selects the full [___] including brackets
-        // so selectionStart points to "[" and selectionEnd-1 points to "]"
-        const charAtStart = text[start];
-        const charAtEnd   = text[end - 1];
-        const isBracketSelection = charAtStart === '[' && charAtEnd === ']';
-        if (!isBracketSelection) return;
-
-        // Line start is from selectionStart (which is at "[")
-        const lineStart = text.lastIndexOf('\n', start - 1) + 1;
-        const lineEnd   = text.indexOf('\n', start);
-        const line      = text.substring(lineStart, lineEnd === -1 ? text.length : lineEnd);
-
-        // Line must start with a placeholder bracket
-        const m = line.match(PLACEHOLDER_LINE_PATTERN);
-        if (!m) return;
-
-        // The matched placeholder must start at the beginning of the line
-        // i.e. the opening "[" is at lineStart
-        if (text[lineStart] !== '[') return;
-
-        const ph = {
-            lineStart,
-            matchLength: m[0].length,
-            separator:   m[2]
-        };
-
-        const result = findLastBlock(textarea, lineStart);
-        if (!result) return;
-
-        const { parsed } = result;
-        const sep    = normalizeSeparator(ph.separator);
-        const prefix = buildPrefix(parsed.letter, parsed.number + 1, sep);
-
-        _ignoreNext = true;
-        clearSavedSelection();
-        replacePlaceholderWithBlock(textarea, prefix, ph);
-
-        lastAutoInsert = { inserted: prefix, length: prefix.length, wasPlaceholder: true };
-
-        textarea.dispatchEvent(new CustomEvent('cassette:advance', {
-            bubbles: true,
-            detail: {
-                letter:         parsed.letter,
-                from:           parsed.number,
-                to:             parsed.number + 1,
-                prefix,
-                wasPlaceholder: true
-            }
-        }));
-    }
+    // ── Public API ────────────────────────────────────────────────────────────
 
     return {
         init,
+        setFormat,
+        getFormat,
+        FORMAT_LN,
+        FORMAT_NL,
         handleNewBlock,
         handleNewSpecimen,
         handleUndo,
         parseBlockLine,
         findLastBlock,
         buildBlockMap,
-        inferSpecimenFromText
+        inferSpecimenFromText,
+        nextLetterSuffix  // exported for testing
     };
 
 })();
