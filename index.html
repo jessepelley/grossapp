@@ -592,6 +592,143 @@ html, body {
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 4px; }
 
+/* ── Field advancement ───────────────────────────────────────────────────── */
+
+.field-adv-group {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+.btn.next-field {
+    border-color: var(--accent);
+    color: var(--accent-text);
+    background: var(--accent-dim);
+    font-weight: 600;
+}
+.btn.next-field.auto-mode {
+    background: var(--accent);
+    color: #fff;
+    border-color: var(--accent);
+}
+.btn.next-field.auto-mode::after {
+    content: '';
+    display: inline-block;
+    width: 5px; height: 5px;
+    border-radius: 50%;
+    background: #4dff91;
+    margin-left: 5px;
+    vertical-align: middle;
+    animation: field-pulse 1.4s ease-in-out infinite;
+}
+@keyframes field-pulse {
+    0%, 100% { opacity: 1; }
+    50%       { opacity: .4; }
+}
+.field-counter {
+    font-family: 'Source Code Pro', monospace;
+    font-size: 10px;
+    color: var(--muted2);
+    min-width: 36px;
+    text-align: center;
+    font-weight: 500;
+    user-select: none;
+}
+.field-counter.has-fields { color: var(--accent-text); }
+
+/* Field prefs popover */
+.field-prefs-panel {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    z-index: 250;
+    background: var(--surface);
+    border: 1px solid var(--border2);
+    border-radius: 5px;
+    box-shadow: var(--shadow-md);
+    padding: 13px 15px 11px;
+    min-width: 272px;
+    display: none;
+}
+.field-prefs-panel.open { display: block; }
+.field-prefs-title {
+    font-family: 'Source Code Pro', monospace;
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: .13em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 11px;
+}
+.field-prefs-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    margin-bottom: 9px;
+}
+.field-prefs-label {
+    font-family: 'Source Code Pro', monospace;
+    font-size: 10px;
+    color: var(--text2);
+    min-width: 76px;
+    padding-top: 3px;
+    flex-shrink: 0;
+}
+.field-prefs-input {
+    font-family: 'Source Code Pro', monospace;
+    font-size: 11px;
+    padding: 3px 7px;
+    border: 1px solid var(--border2);
+    border-radius: 3px;
+    background: var(--surface2);
+    color: var(--text);
+    width: 80px;
+}
+.field-prefs-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 3px;
+    flex: 1;
+}
+.pref-chip {
+    font-family: 'Source Code Pro', monospace;
+    font-size: 10px;
+    padding: 2px 6px;
+    border-radius: 3px;
+    border: 1px solid var(--border2);
+    background: var(--surface2);
+    color: var(--text2);
+    cursor: pointer;
+    user-select: none;
+}
+.pref-chip:hover { border-color: var(--red); color: var(--red); }
+.pref-chip-add {
+    font-family: 'Source Code Pro', monospace;
+    font-size: 12px;
+    line-height: 1;
+    padding: 1px 7px;
+    border-radius: 3px;
+    border: 1px dashed var(--border2);
+    background: transparent;
+    color: var(--muted2);
+    cursor: pointer;
+    flex-shrink: 0;
+}
+.pref-chip-add:hover { border-color: var(--accent); color: var(--accent-text); }
+.pref-clear-btn {
+    font-family: 'Source Code Pro', monospace;
+    font-size: 9px;
+    padding: 2px 7px;
+    border-radius: 3px;
+    border: 1px solid var(--border2);
+    background: transparent;
+    color: var(--muted2);
+    cursor: pointer;
+    flex-shrink: 0;
+    margin-top: 2px;
+}
+.pref-clear-btn:hover { border-color: var(--red); color: var(--red); }
+
 </style>
 </head>
 <body>
@@ -691,6 +828,43 @@ html, body {
           title="Remove the last auto-inserted block label.">
           ↩ Undo
         </button>
+
+        <!-- Field advancement -->
+        <div class="field-adv-group" id="field-adv-group">
+          <button class="btn next-field" id="btn-next-field"
+            title="Next Field — double-click to toggle auto-advance">
+            ▶ Next
+          </button>
+          <button class="btn" id="btn-field-prefs"
+            style="padding:6px 9px;font-size:12px"
+            title="Field advance settings">⚙</button>
+          <span class="field-counter" id="field-counter"></span>
+          <!-- Settings popover -->
+          <div class="field-prefs-panel" id="field-prefs-panel">
+            <div class="field-prefs-title">Field Advance Settings</div>
+            <div class="field-prefs-row">
+              <span class="field-prefs-label">Delay (ms)</span>
+              <input type="number" class="field-prefs-input" id="pref-delay"
+                min="300" max="8000" step="100" value="1500">
+            </div>
+            <div class="field-prefs-row">
+              <span class="field-prefs-label">Pause chars</span>
+              <div class="field-prefs-chips" id="pref-cont-chars"></div>
+              <button class="pref-chip-add" id="pref-add-char" title="Add pause character">+</button>
+            </div>
+            <div class="field-prefs-row">
+              <span class="field-prefs-label">Pause words</span>
+              <div class="field-prefs-chips" id="pref-cont-words"></div>
+              <button class="pref-chip-add" id="pref-add-word" title="Add pause word">+</button>
+            </div>
+            <div class="field-prefs-row">
+              <span class="field-prefs-label">Learned</span>
+              <div class="field-prefs-chips" id="pref-learned"></div>
+              <button class="pref-clear-btn" id="pref-clear-learned">Clear all</button>
+            </div>
+          </div>
+        </div>
+
         <div style="flex:1"></div>
         <button class="btn" onclick="App.detectFromPaste()"
           title="Re-scan the gross text: saves template to database, checks for filled-in specimen site, refreshes block map. Use after edits or if auto-detection missed on paste.">
