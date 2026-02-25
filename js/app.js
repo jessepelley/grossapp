@@ -32,8 +32,17 @@ const App = (() => {
         // Cassette automation
         Cassette.init(ta);
         // Capture state just before any input for cassette:advance undo
-        ta.addEventListener('beforeinput', () => {
+        ta.addEventListener('beforeinput', (e) => {
             _preInputState = { text: ta.value, s: ta.selectionStart, e: ta.selectionEnd };
+            // Push undo snapshot at word boundaries for word-processor-like granularity
+            if (_undoPushAtNextInput) {
+                pushUndo('idle', ta.value, { s: ta.selectionStart, e: ta.selectionEnd });
+                _undoPushAtNextInput = false;
+            } else if (e.inputType === 'insertText' && (e.data === ' ' || e.data === '\n')) {
+                pushUndo('word', ta.value, { s: ta.selectionStart, e: ta.selectionEnd });
+            } else if (e.inputType === 'insertLineBreak' || e.inputType === 'insertParagraph') {
+                pushUndo('line', ta.value, { s: ta.selectionStart, e: ta.selectionEnd });
+            }
         });
         ta.addEventListener('cassette:advance', (e) => {
             // Push the pre-advance state so undo can reverse auto-inserted blocks
@@ -56,6 +65,9 @@ const App = (() => {
             _draftSaveTimer = setTimeout(() => {
                 try { localStorage.setItem('grossapp-dictation-draft', ta.value); } catch {}
             }, 300);
+            // Idle typing timer — after 2s of no input, flag to push undo snapshot before next input
+            clearTimeout(_undoTypingTimer);
+            _undoTypingTimer = setTimeout(() => { _undoPushAtNextInput = true; }, 2000);
             updateFooter();
             updateBlockMap();
             scanTermUsage();
@@ -65,6 +77,16 @@ const App = (() => {
             refreshFieldCounter();
             updateFieldAdvStatus();
             updateCopyBtn();
+        });
+
+        // Ctrl+Z → undo; Ctrl+Y / Ctrl+Shift+Z → redo
+        ta.addEventListener('keydown', (e) => {
+            if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key === 'z' && !e.shiftKey) {
+                e.preventDefault(); undoAction();
+            } else if ((e.ctrlKey || e.metaKey) && !e.altKey &&
+                       (e.key === 'y' || (e.shiftKey && e.key === 'z'))) {
+                e.preventDefault(); redoAction();
+            }
         });
 
         // Detect template on paste; save undo snapshot and reset field tracking
@@ -128,6 +150,11 @@ const App = (() => {
                 else goToNextField();
                 _nfClicks = 0;
             }, 260);
+        });
+        // Right-click also toggles auto-advance (alternative to double-click)
+        document.getElementById('btn-next-field').addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+            toggleAutoAdvance();
         });
 
         // Gear button — open/close prefs panel
@@ -240,6 +267,9 @@ const App = (() => {
             refreshFieldCounter();
             updateCopyBtn();
         }
+
+        // Sync footer and Next button to loaded preferences
+        updateFieldAdvStatus();
     }
 
     // ── Autocomplete factory ──────────────────────────────────────────────────
@@ -514,7 +544,7 @@ const App = (() => {
 
         // Save raw template to localStorage immediately (before edits), so it
         // can be submitted to the backend once a specimen is set.
-        if (text.length > 30 && /\[[^\]]+\]/.test(text) && !_pendingRawTemplate) {
+        if (text.length > 30 && /\[[^\]]*\]/.test(text) && !_pendingRawTemplate) {
             _pendingRawTemplate = text;
             try { localStorage.setItem('grossapp-pending-template', text); } catch {}
         }
@@ -627,7 +657,7 @@ const App = (() => {
     // Auto-copies to clipboard when all fields are filled.
     function checkCompletion() {
         const text = document.getElementById('dictation').value;
-        const hasUnfilled = /\[[^\]]+\]/.test(text); // any [...] remaining
+        const hasUnfilled = /\[[^\]]*\]/.test(text); // any [...] remaining (including [])
         const hasContent  = text.trim().length > 50;
         const complete    = !hasUnfilled && hasContent && !state.submitted;
 
@@ -647,7 +677,7 @@ const App = (() => {
             clearTimeout(_autoCopyTimer);
             _autoCopyTimer = setTimeout(() => {
                 const t = document.getElementById('dictation').value;
-                if (!/\[[^\]]+\]/.test(t) && t.trim().length > 50) {
+                if (!/\[[^\]]*\]/.test(t) && t.trim().length > 50) {
                     const isFirst = !_autoCopied;
                     navigator.clipboard?.writeText(t).then(() => {
                         if (isFirst) {
@@ -664,11 +694,14 @@ const App = (() => {
         }
     }
 
-    // ── Undo history (snapshot-based) ────────────────────────────────────────
+    // ── Undo/redo history (snapshot-based, word-boundary granularity) ─────────
 
-    const _undoStack  = [];
-    const _MAX_UNDO   = 40;
-    let   _preInputState = null; // captured by beforeinput, used by cassette:advance
+    const _undoStack         = [];
+    const _redoStack         = [];
+    const _MAX_UNDO          = 100;
+    let   _preInputState     = null;  // captured by beforeinput, used by cassette:advance
+    let   _undoTypingTimer   = null;  // idle timer for undo snapshot on typing pause
+    let   _undoPushAtNextInput = false; // flag: push undo snapshot before next input
 
     function pushUndo(label, text, sel) {
         const ta = document.getElementById('dictation');
@@ -678,12 +711,17 @@ const App = (() => {
         if (_undoStack.length > 0 && _undoStack[_undoStack.length - 1].text === t) return;
         _undoStack.push({ text: t, selStart: s.s, selEnd: s.e, label });
         if (_undoStack.length > _MAX_UNDO) _undoStack.shift();
+        // Any new action clears the redo stack
+        _redoStack.length = 0;
     }
 
-    function popUndo() {
+    function undoAction() {
         if (_undoStack.length === 0) { toast('Nothing to undo', ''); return false; }
+        const ta = document.getElementById('dictation');
+        // Save current state to redo stack before restoring
+        _redoStack.push({ text: ta.value, selStart: ta.selectionStart, selEnd: ta.selectionEnd, label: 'redo' });
+        if (_redoStack.length > _MAX_UNDO) _redoStack.shift();
         const snap = _undoStack.pop();
-        const ta   = document.getElementById('dictation');
         ta.value          = snap.text;
         ta.selectionStart = snap.selStart;
         ta.selectionEnd   = snap.selEnd;
@@ -694,7 +732,34 @@ const App = (() => {
         scanTermUsage();
         checkCompletion();
         refreshFieldCounter();
+        updateCopyBtn();
         toast('Undone', '');
+        return true;
+    }
+
+    function redoAction() {
+        if (_redoStack.length === 0) { toast('Nothing to redo', ''); return false; }
+        const ta = document.getElementById('dictation');
+        // Push current state to undo stack without clearing redo
+        const t = ta.value;
+        const s = { s: ta.selectionStart, e: ta.selectionEnd };
+        if (_undoStack.length === 0 || _undoStack[_undoStack.length - 1].text !== t) {
+            _undoStack.push({ text: t, selStart: s.s, selEnd: s.e, label: 'pre-redo' });
+            if (_undoStack.length > _MAX_UNDO) _undoStack.shift();
+        }
+        const snap = _redoStack.pop();
+        ta.value          = snap.text;
+        ta.selectionStart = snap.selStart;
+        ta.selectionEnd   = snap.selEnd;
+        ta.focus();
+        // Update UI directly — do NOT dispatch input event (would re-trigger cassette)
+        updateFooter();
+        updateBlockMap();
+        scanTermUsage();
+        checkCompletion();
+        refreshFieldCounter();
+        updateCopyBtn();
+        toast('Redone', '');
         return true;
     }
 
@@ -703,6 +768,8 @@ const App = (() => {
         const ta = document.getElementById('dictation');
         pushUndo('block insert');
         Cassette.handleNewBlock(ta);
+        fieldAdv.anchor = -1;         // Cancel pending auto-advance so cursor stays at block label
+        clearTimeout(fieldAdv.timer);
         updateFooter();
         updateBlockMap();
     }
@@ -727,6 +794,7 @@ const App = (() => {
         state.submitted   = false;
 
         _undoStack.length    = 0;
+        _redoStack.length    = 0;
         _autoCopied          = false;
         _specimenWasInferred = false;
         clearTimeout(_autoCopyTimer);
@@ -741,6 +809,7 @@ const App = (() => {
 
         updateFooter();
         updateHeaderContext();
+        updateNextBtn();
         updateFieldAdvStatus();
         updateCopyBtn();
         checkCompletion();
@@ -748,7 +817,11 @@ const App = (() => {
     }
 
     function undoInsert() {
-        popUndo();
+        undoAction();
+    }
+
+    function redoInsert() {
+        redoAction();
     }
 
     // ── Case submission ───────────────────────────────────────────────────────
@@ -814,6 +887,7 @@ const App = (() => {
 
         // Reset undo stack, auto-copy guard, pending template, and inference flag
         _undoStack.length    = 0;
+        _redoStack.length    = 0;
         _autoCopied          = false;
         _specimenWasInferred = false;
         clearTimeout(_autoCopyTimer);
@@ -829,6 +903,7 @@ const App = (() => {
 
         updateFooter();
         updateHeaderContext();
+        updateNextBtn();
         updateFieldAdvStatus();
         updateCopyBtn();
         checkCompletion();
@@ -917,7 +992,7 @@ const App = (() => {
                 const text = await navigator.clipboard.readText();
                 if (text !== _clipText) {
                     _clipText        = text;
-                    _clipHasTemplate = text.length > 20 && /\[[^\]]+\]/.test(text);
+                    _clipHasTemplate = text.length > 20 && /\[[^\]]*\]/.test(text);
                     updatePasteBtn();
                 }
             } catch { /* no focus or permission denied */ }
@@ -954,7 +1029,7 @@ const App = (() => {
         ta.focus();
 
         // Save raw template immediately (before any edits)
-        if (/\[[^\]]+\]/.test(text)) {
+        if (/\[[^\]]*\]/.test(text)) {
             _pendingRawTemplate = text;
             try { localStorage.setItem('grossapp-pending-template', text); } catch {}
         }
@@ -1053,7 +1128,7 @@ const App = (() => {
     // Returns array of all [...] fields in `text` with start/end indices
     function findAllFields(text) {
         const out = [];
-        const re  = /\[[^\]]+\]/g;
+        const re  = /\[[^\]]*\]/g;
         let m;
         while ((m = re.exec(text)) !== null) {
             out.push({ start: m.index, end: m.index + m[0].length });
@@ -1242,7 +1317,7 @@ const App = (() => {
         updateNextBtn();
         updateFieldAdvStatus();
         if (fieldAdv.auto) {
-            toast('Auto-advance ON — double-click \u25b6 Next to disable', 'green');
+            toast('Auto-advance ON — right-click \u25b6 Next to disable', 'green');
         } else {
             clearTimeout(fieldAdv.timer);
             toast('Auto-advance OFF', '');
@@ -1254,8 +1329,8 @@ const App = (() => {
         if (!btn) return;
         btn.classList.toggle('auto-mode', fieldAdv.auto);
         btn.title = fieldAdv.auto
-            ? '\u25b6 Next Field \u2014 Auto ON (double-click to disable)'
-            : '\u25b6 Next Field (double-click to enable auto-advance)';
+            ? '\u25b6 Next Field \u2014 Auto ON (right-click or double-click to disable)'
+            : '\u25b6 Next Field (right-click or double-click to enable auto-advance)';
     }
 
     // ── Field prefs panel ─────────────────────────────────────────────────────
@@ -1345,7 +1420,7 @@ const App = (() => {
 
     // Public surface
     return {
-        newBlock, newSpecimen, undoInsert,
+        newBlock, newSpecimen, undoInsert, redoInsert,
         submitCase, copyToClipboard, clearAll,
         toggleSection, detectFromPaste,
         toggleTheme, toggleFormat,

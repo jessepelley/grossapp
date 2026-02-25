@@ -845,8 +845,13 @@ html, body {
         </button>
         <button class="btn danger" onclick="App.undoInsert()"
           onmousedown="event.preventDefault()"
-          title="Remove the last auto-inserted block label.">
+          title="Undo last change (Ctrl+Z)">
           ↩ Undo
+        </button>
+        <button class="btn" onclick="App.redoInsert()"
+          onmousedown="event.preventDefault()"
+          title="Redo last change (Ctrl+Y)">
+          Redo ↪
         </button>
 
         <!-- Paste from clipboard -->
@@ -864,7 +869,7 @@ html, body {
             ◀ Prev
           </button>
           <button class="btn next-field" id="btn-next-field"
-            title="Next Field — double-click to toggle auto-advance">
+            title="Next Field — right-click or double-click to toggle auto-advance">
             ▶ Next
           </button>
           <button class="btn" id="btn-field-prefs"
