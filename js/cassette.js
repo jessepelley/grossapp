@@ -419,6 +419,9 @@ const Cassette = (() => {
             return;
         }
 
+        // Never auto-advance when the user is deleting content (backspace, delete, cut, etc.)
+        if (e.inputType?.startsWith('delete')) return;
+
         const text      = textarea.value;
         const pos       = textarea.selectionStart;
         const lineStart = text.lastIndexOf('\n', pos - 1) + 1;
