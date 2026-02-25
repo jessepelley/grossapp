@@ -288,6 +288,22 @@ const Cassette = (() => {
         return null;
     }
 
+    // ── Scroll cursor into view ───────────────────────────────────────────────
+
+    function scrollCursorIntoView(textarea) {
+        requestAnimationFrame(() => {
+            if (!textarea) return;
+            const lineHeight = parseFloat(getComputedStyle(textarea).lineHeight) || 20;
+            const paddingTop = parseFloat(getComputedStyle(textarea).paddingTop)  || 18;
+            const textBefore = textarea.value.substring(0, textarea.selectionEnd);
+            const lineNumber = textBefore.split('\n').length;
+            const cursorY    = paddingTop + (lineNumber - 1) * lineHeight;
+            if (cursorY + lineHeight > textarea.scrollTop + textarea.clientHeight) {
+                textarea.scrollTop = cursorY - textarea.clientHeight + lineHeight * 3;
+            }
+        });
+    }
+
     // ── Core insertion ────────────────────────────────────────────────────────
 
     function insertAtCursor(textarea, text) {
@@ -299,6 +315,7 @@ const Cassette = (() => {
         const newPos = start + text.length;
         textarea.selectionStart = textarea.selectionEnd = newPos;
         textarea.focus();
+        scrollCursorIntoView(textarea);
     }
 
     function prependToCurrentLine(textarea, prefix) {
@@ -311,6 +328,7 @@ const Cassette = (() => {
         const newPos    = lineStart + prefix.length + (pos - lineStart);
         textarea.selectionStart = textarea.selectionEnd = newPos;
         textarea.focus();
+        scrollCursorIntoView(textarea);
     }
 
     function replacePlaceholderWithBlock(textarea, prefix, ph) {
@@ -322,6 +340,7 @@ const Cassette = (() => {
         textarea.selectionStart = textarea.selectionEnd = newPos;
         textarea.focus();
         textarea.dispatchEvent(new Event('input', { bubbles: true }));
+        scrollCursorIntoView(textarea);
     }
 
     // ── dispatchAdvance helper ────────────────────────────────────────────────
@@ -449,6 +468,7 @@ const Cassette = (() => {
                 textarea.value = before + prefix + rest;
                 textarea.selectionStart = textarea.selectionEnd = lineStart + prefix.length;
                 textarea.focus();
+                scrollCursorIntoView(textarea);
                 lastAutoInsert = { inserted: prefix, length: prefix.length };
                 dispatchAdvance(textarea, result.parsed, prefix);
             } else {
@@ -472,6 +492,7 @@ const Cassette = (() => {
             textarea.value = before + prefix + rest;
             textarea.selectionStart = textarea.selectionEnd = lineStart + prefix.length;
             textarea.focus();
+            scrollCursorIntoView(textarea);
             lastAutoInsert = { inserted: prefix, length: prefix.length };
             dispatchAdvance(textarea, result.parsed, prefix, { wasPlaceholder: true });
         }

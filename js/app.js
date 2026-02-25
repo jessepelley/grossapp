@@ -41,6 +41,9 @@ const App = (() => {
                 pushUndo('block insert', _preInputState.text, { s: _preInputState.s, e: _preInputState.e });
                 _preInputState = null;
             }
+            // Cancel any pending auto-advance so it doesn't steal cursor from the block label
+            fieldAdv.anchor = -1;
+            clearTimeout(fieldAdv.timer);
             toast(`Block: ${e.detail.prefix}`, 'blue');
             updateFooter();
             updateBlockMap();
@@ -48,6 +51,11 @@ const App = (() => {
 
         // Live footer + block map on any input
         ta.addEventListener('input', () => {
+            // Debounced localStorage draft save
+            clearTimeout(_draftSaveTimer);
+            _draftSaveTimer = setTimeout(() => {
+                try { localStorage.setItem('grossapp-dictation-draft', ta.value); } catch {}
+            }, 300);
             updateFooter();
             updateBlockMap();
             scanTermUsage();
@@ -55,6 +63,8 @@ const App = (() => {
             maybeInferSpecimen();
             onFieldInput();
             refreshFieldCounter();
+            updateFieldAdvStatus();
+            updateCopyBtn();
         });
 
         // Detect template on paste; save undo snapshot and reset field tracking
@@ -173,8 +183,18 @@ const App = (() => {
             toast('Learned exceptions cleared', '');
         });
 
-        // Cursor-back detection for learning
-        document.addEventListener('selectionchange', checkCursorBack);
+        // Cursor-back detection for learning + cancel advance when DMO enters a field
+        document.addEventListener('selectionchange', () => {
+            checkCursorBack();
+            const activeEl = document.activeElement;
+            if (activeEl === ta) {
+                // Cancel pending auto-advance when cursor enters a field (e.g. DMO highlight)
+                if (isCursorInField(ta.value, ta.selectionStart)) {
+                    clearTimeout(fieldAdv.timer);
+                }
+                updateFieldAdvStatus();
+            }
+        });
 
         // Also commit specimen on blur (clicking away after typing)
         document.getElementById('specimen-input').addEventListener('blur', async () => {
@@ -210,6 +230,16 @@ const App = (() => {
             },
             (row) => ({ label: row.label, meta: row.use_count ? `${row.use_count}×` : '' })
         );
+
+        // Restore saved draft unconditionally on load (prevents information loss on reload)
+        const savedDraft = localStorage.getItem('grossapp-dictation-draft');
+        if (savedDraft) {
+            ta.value = savedDraft;
+            updateFooter();
+            updateBlockMap();
+            refreshFieldCounter();
+            updateCopyBtn();
+        }
     }
 
     // ── Autocomplete factory ──────────────────────────────────────────────────
@@ -218,32 +248,68 @@ const App = (() => {
         const input    = document.getElementById(inputId);
         const dropdown = document.getElementById(dropdownId);
         let timer      = null;
+        let activeIdx  = -1;
+
+        function getItems() { return dropdown.querySelectorAll('.dd-item'); }
+
+        function setActive(idx) {
+            const items = getItems();
+            activeIdx = Math.max(-1, Math.min(idx, items.length - 1));
+            items.forEach((el, i) => el.classList.toggle('highlighted', i === activeIdx));
+        }
 
         input.addEventListener('input', () => {
             clearTimeout(timer);
+            activeIdx = -1;
             const q = input.value.trim();
             if (!q) { closeDropdown(dropdownId); return; }
             timer = setTimeout(async () => {
                 try {
                     const results = await searchFn(q);
                     renderDropdown(dropdown, results, renderRow, onSelect, q, onNew);
+                    activeIdx = -1;
                 } catch { closeDropdown(dropdownId); }
             }, 200);
         });
 
         input.addEventListener('keydown', (e) => {
+            const isOpen = dropdown.classList.contains('open');
+
+            if (e.key === 'ArrowDown' || (e.key === 'Tab' && !e.shiftKey && isOpen)) {
+                if (!isOpen) return;
+                e.preventDefault();
+                setActive(activeIdx + 1);
+                return;
+            }
+            if (e.key === 'ArrowUp') {
+                if (!isOpen) return;
+                e.preventDefault();
+                setActive(activeIdx - 1);
+                return;
+            }
             if (e.key === 'Enter') {
                 e.preventDefault();
-                const val = input.value.trim();
-                if (val) onNew(val);
-                closeDropdown(dropdownId);
+                const items = getItems();
+                if (isOpen && activeIdx >= 0 && items[activeIdx]) {
+                    items[activeIdx].click();
+                } else {
+                    const val = input.value.trim();
+                    if (val) onNew(val);
+                    closeDropdown(dropdownId);
+                }
+                activeIdx = -1;
+                return;
             }
-            if (e.key === 'Escape') closeDropdown(dropdownId);
+            if (e.key === 'Escape') {
+                closeDropdown(dropdownId);
+                activeIdx = -1;
+            }
         });
 
         document.addEventListener('click', (e) => {
             if (!input.contains(e.target) && !dropdown.contains(e.target)) {
                 closeDropdown(dropdownId);
+                activeIdx = -1;
             }
         });
     }
@@ -390,6 +456,8 @@ const App = (() => {
                 el.classList.add('used');
             }
 
+            // Prevent focus loss from textarea when clicking a term
+            el.addEventListener('mousedown', (e) => e.preventDefault());
             // Click to insert at cursor
             el.addEventListener('click', () => {
                 insertTerm(term);
@@ -573,19 +641,24 @@ const App = (() => {
                     : 'Add content before submitting';
         }
 
-        // Auto-copy to clipboard when all fields are filled (debounced)
-        if (complete && !_autoCopied) {
+        // Auto-copy to clipboard when all fields are filled (debounced).
+        // After first copy (toast shown), continue silently updating on further edits.
+        if (complete) {
             clearTimeout(_autoCopyTimer);
             _autoCopyTimer = setTimeout(() => {
                 const t = document.getElementById('dictation').value;
                 if (!/\[[^\]]+\]/.test(t) && t.trim().length > 50) {
+                    const isFirst = !_autoCopied;
                     navigator.clipboard?.writeText(t).then(() => {
-                        _autoCopied = true;
-                        toast('All fields complete \u2014 copied to clipboard \u2713', 'green');
+                        if (isFirst) {
+                            _autoCopied = true;
+                            toast('All fields complete \u2014 copied to clipboard \u2713', 'green');
+                        }
+                        // subsequent edits: clipboard updated silently
                     }).catch(() => {});
                 }
             }, 800);
-        } else if (!complete) {
+        } else {
             _autoCopied = false;
             clearTimeout(_autoCopyTimer);
         }
@@ -635,11 +708,43 @@ const App = (() => {
     }
 
     function newSpecimen() {
-        const ta = document.getElementById('dictation');
-        pushUndo('specimen insert');
-        Cassette.handleNewSpecimen(ta);
+        if (document.getElementById('dictation').value &&
+            !confirm('Clear gross and specimen for next specimen?\nClinical history will be kept.')) return;
+
+        document.getElementById('dictation').value = '';
+        document.getElementById('specimen-input').value = '';
+        document.getElementById('history-input').value = '';
+        // Keep history-tags and state.histories intentionally
+        document.getElementById('word-cloud').innerHTML =
+            '<span class="cloud-empty">Select a specimen to see suggestions</span>';
+        document.getElementById('block-map').innerHTML =
+            '<span style="font-size:11px;color:var(--muted2);font-style:italic">No blocks detected</span>';
+
+        state.specimen    = null;
+        state.template_id = null;
+        state.termsShown  = [];
+        state.termsUsed   = [];
+        state.submitted   = false;
+
+        _undoStack.length    = 0;
+        _autoCopied          = false;
+        _specimenWasInferred = false;
+        clearTimeout(_autoCopyTimer);
+        _pendingRawTemplate  = null;
+        try { localStorage.removeItem('grossapp-pending-template'); } catch {}
+        try { localStorage.removeItem('grossapp-dictation-draft'); } catch {}
+
+        fieldAdv.anchor    = -1;
+        fieldAdv.watchBack = false;
+        clearTimeout(fieldAdv.timer);
+        updateFieldCounter(0, 0);
+
         updateFooter();
-        updateBlockMap();
+        updateHeaderContext();
+        updateFieldAdvStatus();
+        updateCopyBtn();
+        checkCompletion();
+        toast('Ready for next specimen \u2014 history retained', 'blue');
     }
 
     function undoInsert() {
@@ -714,6 +819,7 @@ const App = (() => {
         clearTimeout(_autoCopyTimer);
         _pendingRawTemplate  = null;
         try { localStorage.removeItem('grossapp-pending-template'); } catch {}
+        try { localStorage.removeItem('grossapp-dictation-draft'); } catch {}
 
         // Reset field tracking
         fieldAdv.anchor    = -1;
@@ -723,6 +829,9 @@ const App = (() => {
 
         updateFooter();
         updateHeaderContext();
+        updateFieldAdvStatus();
+        updateCopyBtn();
+        checkCompletion();
     }
 
     // ── Collapsible sidebar sections ──────────────────────────────────────────
@@ -790,6 +899,7 @@ const App = (() => {
     let _autoCopied      = false;   // guard for auto-copy-on-complete
     let _autoCopyTimer   = null;
     let _pendingRawTemplate = null; // raw (unfilled) template saved on paste
+    let _draftSaveTimer  = null;    // debounce timer for localStorage draft save
 
     function updatePasteBtn() {
         const btn = document.getElementById('btn-paste');
@@ -862,6 +972,7 @@ const App = (() => {
 
         _clipHasTemplate = false;
         updatePasteBtn();
+        updateCopyBtn();
         toast('Pasted from clipboard', 'blue');
         detectFromPaste();
     }
@@ -1068,6 +1179,7 @@ const App = (() => {
         // If cursor is still inside a [...], the field isn't filled yet
         if (isCursorInField(text, cursor)) {
             clearTimeout(fieldAdv.timer);
+            updateFieldAdvStatus();
             return;
         }
 
@@ -1077,9 +1189,9 @@ const App = (() => {
         // Estimate replacement: text from anchor to cursor
         const anchor = Math.min(fieldAdv.anchor, text.length);
         const filled = text.substring(anchor, cursor).trim();
-        if (!filled) { clearTimeout(fieldAdv.timer); return; }
+        if (!filled) { clearTimeout(fieldAdv.timer); updateFieldAdvStatus(); return; }
 
-        if (shouldHoldAdvance(filled)) { clearTimeout(fieldAdv.timer); return; }
+        if (shouldHoldAdvance(filled)) { clearTimeout(fieldAdv.timer); updateFieldAdvStatus(); return; }
 
         // Schedule the advance (re-schedule on each keystroke to debounce)
         clearTimeout(fieldAdv.timer);
@@ -1095,6 +1207,7 @@ const App = (() => {
             fieldAdv.watchBack      = true;
             goToNextField(fromPos);
         }, fieldAdv.delay);
+        updateFieldAdvStatus();
     }
 
     // Called on `selectionchange` — watches for cursor-back after auto-advance
@@ -1127,6 +1240,7 @@ const App = (() => {
         fieldAdv.auto = !fieldAdv.auto;
         saveFieldPrefs();
         updateNextBtn();
+        updateFieldAdvStatus();
         if (fieldAdv.auto) {
             toast('Auto-advance ON — double-click \u25b6 Next to disable', 'green');
         } else {
@@ -1182,6 +1296,48 @@ const App = (() => {
             chip.onclick     = () => onRemove(item);
             el.appendChild(chip);
         });
+    }
+
+    // ── Copy button state ─────────────────────────────────────────────────────
+    function updateCopyBtn() {
+        const btn = document.getElementById('btn-copy-sidebar');
+        if (!btn) return;
+        const hasContent = document.getElementById('dictation').value.trim().length > 0;
+        btn.classList.toggle('green-btn', hasContent);
+    }
+
+    // ── Footer auto-next status ────────────────────────────────────────────────
+    function updateFieldAdvStatus() {
+        const el = document.getElementById('field-adv-status');
+        if (!el) return;
+
+        if (!fieldAdv.auto) { el.textContent = ''; return; }
+
+        const ta     = document.getElementById('dictation');
+        const text   = ta.value;
+        const cursor = ta.selectionEnd;
+        const anchor = fieldAdv.anchor >= 0 ? Math.min(fieldAdv.anchor, text.length) : -1;
+
+        if (anchor < 0) { el.textContent = 'auto-next: on'; return; }
+
+        const filled = text.substring(anchor, cursor).trim();
+        if (!filled) { el.textContent = 'auto-next: on'; return; }
+
+        const lastChar = filled[filled.length - 1];
+        if (fieldAdv.contChars.includes(lastChar)) {
+            el.textContent = `auto-next: paused (${lastChar})`;
+            return;
+        }
+
+        const words    = filled.toLowerCase().split(/\s+/);
+        const lastWord = words[words.length - 1].replace(/[.,;:!?]+$/, '');
+        if (fieldAdv.contWords.some(w => w.toLowerCase() === lastWord) ||
+            fieldAdv.learned.some(w => w.toLowerCase() === lastWord)) {
+            el.textContent = `auto-next: paused (\u201c${lastWord}\u201d)`;
+            return;
+        }
+
+        el.textContent = fieldAdv.timer ? 'auto-next: counting\u2026' : 'auto-next: on';
     }
 
     // ── Bootstrap ─────────────────────────────────────────────────────────────

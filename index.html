@@ -554,7 +554,7 @@ html, body {
     color: var(--text);
 }
 .dd-item:last-child { border-bottom: none; }
-.dd-item:hover { background: var(--surface2); }
+.dd-item:hover, .dd-item.highlighted { background: var(--accent-dim); color: var(--accent-text); }
 .dd-item .dd-count {
     font-family: 'Source Code Pro', monospace;
     font-size: 10px;
@@ -602,10 +602,7 @@ html, body {
     gap: 4px;
 }
 .btn.next-field {
-    border-color: var(--accent);
-    color: var(--accent-text);
-    background: var(--accent-dim);
-    font-weight: 600;
+    /* same look as .btn in default state */
 }
 .btn.next-field.auto-mode {
     background: var(--accent);
@@ -730,6 +727,12 @@ html, body {
 }
 .pref-clear-btn:hover { border-color: var(--red); color: var(--red); }
 
+/* Footer auto-next status */
+.footer-adv-status {
+    color: var(--accent-text);
+    font-style: italic;
+}
+
 /* Paste button */
 .btn.paste-btn.has-template {
     border-color: var(--green);
@@ -831,14 +834,17 @@ html, body {
     <div class="dictation-wrap">
       <div class="dictation-toolbar">
         <button class="btn" onclick="App.newBlock()"
+          onmousedown="event.preventDefault()"
           title="Insert the next block label. Also fires automatically when a new line is detected after a cassette entry.">
           + Block
         </button>
         <button class="btn" onclick="App.newSpecimen()"
-          title="Start a new specimen — increments the letter (A→B) or specimen number (1→2) and resets to block 1.">
+          onmousedown="event.preventDefault()"
+          title="Clear gross and specimen, keep clinical history for next specimen in this case.">
           + Specimen
         </button>
         <button class="btn danger" onclick="App.undoInsert()"
+          onmousedown="event.preventDefault()"
           title="Remove the last auto-inserted block label.">
           ↩ Undo
         </button>
@@ -846,13 +852,14 @@ html, body {
         <!-- Paste from clipboard -->
         <button class="btn paste-btn" id="btn-paste"
           onclick="App.pasteFromClipboard()"
+          onmousedown="event.preventDefault()"
           title="Paste from clipboard (replaces all text)">
           Paste
         </button>
 
         <!-- Field advancement -->
         <div class="field-adv-group" id="field-adv-group">
-          <button class="btn next-field" id="btn-prev-field"
+          <button class="btn" id="btn-prev-field"
             title="Previous Field">
             ◀ Prev
           </button>
@@ -862,6 +869,7 @@ html, body {
           </button>
           <button class="btn" id="btn-field-prefs"
             style="padding:6px 9px;font-size:12px"
+            onmousedown="event.preventDefault()"
             title="Field advance settings">⚙</button>
           <span class="field-counter" id="field-counter"></span>
           <!-- Settings popover -->
@@ -892,6 +900,7 @@ html, body {
 
         <div style="flex:1"></div>
         <button class="btn" onclick="App.detectFromPaste()"
+          onmousedown="event.preventDefault()"
           title="Re-scan the gross text: saves template to database, checks for filled-in specimen site, refreshes block map. Use after edits or if auto-detection missed on paste.">
           ⟳ Re-parse
         </button>
@@ -906,6 +915,7 @@ and auto-advance cassette block labels as you work."></textarea>
       <div class="dictation-footer">
         <span class="footer-stat" id="char-count">0 chars</span>
         <span id="next-block-preview"></span>
+        <span class="footer-stat footer-adv-status" id="field-adv-status"></span>
         <span class="footer-stat" id="block-count">0 blocks</span>
       </div>
     </div>
@@ -947,7 +957,7 @@ and auto-advance cassette block labels as you work."></textarea>
         </div>
         <div class="sidebar-body" id="section-controls">
           <div class="btn-group">
-            <button class="btn full green-btn" onclick="App.copyToClipboard()">
+            <button class="btn full" id="btn-copy-sidebar" onclick="App.copyToClipboard()">
               Copy to clipboard
               <sub>Paste back into APIS</sub>
             </button>
