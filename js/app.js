@@ -74,19 +74,21 @@ const App = (() => {
             'specimen-dropdown',
             (q) => API.specimens.search(q),
             (item) => {
-                // Selected from dropdown
-                state.specimen = { id: item.id, name: item.name };
+                // Selected from dropdown — manual action, lock against re-inference
+                state.specimen       = { id: item.id, name: item.name };
+                _specimenWasInferred = false;
                 document.getElementById('specimen-input').value = item.name;
                 closeDropdown('specimen-dropdown');
                 updateHeaderContext();
                 fetchSuggestions();
-                maybeSavePendingTemplate(); // submit raw template now that specimen is known
+                maybeSavePendingTemplate();
                 toast(`Specimen: ${item.name}`, 'blue');
             },
             async (value) => {
-                // Typed and confirmed with Enter — upsert
-                const created = await API.specimens.upsert(value);
-                state.specimen = { id: created.id, name: created.name };
+                // Typed and confirmed with Enter — upsert; manual action
+                const created        = await API.specimens.upsert(value);
+                state.specimen       = { id: created.id, name: created.name };
+                _specimenWasInferred = false;
                 document.getElementById('specimen-input').value = created.name;
                 updateHeaderContext();
                 fetchSuggestions();
@@ -101,7 +103,7 @@ const App = (() => {
         updateNextBtn();
 
         // Prev field button
-        document.getElementById('btn-prev-field').addEventListener('click', goPrevField);
+        document.getElementById('btn-prev-field').addEventListener('click', () => goPrevField());
 
         // Start clipboard background polling (asks for permission once)
         startClipboardPolling();
@@ -179,8 +181,9 @@ const App = (() => {
             const val = document.getElementById('specimen-input').value.trim();
             if (!val || (state.specimen && state.specimen.name === val)) return;
             try {
-                const created = await API.specimens.upsert(val);
-                state.specimen = { id: created.id, name: created.name };
+                const created        = await API.specimens.upsert(val);
+                state.specimen       = { id: created.id, name: created.name };
+                _specimenWasInferred = false; // user edited manually — lock against re-inference
                 document.getElementById('specimen-input').value = created.name;
                 updateHeaderContext();
                 fetchSuggestions();
@@ -443,7 +446,7 @@ const App = (() => {
 
         // Save raw template to localStorage immediately (before edits), so it
         // can be submitted to the backend once a specimen is set.
-        if (text.length > 30 && /\[[^\]]{0,60}\]/.test(text) && !_pendingRawTemplate) {
+        if (text.length > 30 && /\[[^\]]+\]/.test(text) && !_pendingRawTemplate) {
             _pendingRawTemplate = text;
             try { localStorage.setItem('grossapp-pending-template', text); } catch {}
         }
@@ -506,28 +509,49 @@ const App = (() => {
         map.scrollTop = map.scrollHeight;
     }
 
-    // Scan textarea for filled-in specimen site and infer specimen if not yet set
+    // Scan textarea for filled-in specimen site and infer specimen.
+    // Re-runs even when specimen is already set IF it was auto-inferred (not manually set).
     // Pattern: specimen site "something that is not [___]"
-    let _inferTimer = null;
+    let _inferTimer          = null;
+    let _specimenWasInferred = false; // true when specimen came from auto-inference
+
     function maybeInferSpecimen() {
-        if (state.specimen) return;
+        // Only skip if the specimen was set manually by the user
+        if (state.specimen && !_specimenWasInferred) return;
         clearTimeout(_inferTimer);
         _inferTimer = setTimeout(async () => {
             const text = document.getElementById('dictation').value;
             // Match: specimen site "VALUE" where VALUE is not a placeholder
             const m = text.match(/specimen site\s+"([^"\[\]]{3,})"/i);
             if (!m) return;
-            const inferred = m[1].trim();
+            let inferred = m[1].trim();
             if (!inferred || /^\[/.test(inferred)) return;
+
+            // Truncate at first comma — removes orientation/description details
+            // e.g. "right breast lump, sutures long..." → "right breast lump"
+            const commaIdx = inferred.indexOf(',');
+            if (commaIdx > 2) inferred = inferred.substring(0, commaIdx).trim();
+            if (!inferred) return;
+
+            // Skip if nothing changed
+            if (state.specimen && state.specimen.name === inferred) return;
+
             try {
-                const created = await API.specimens.upsert(inferred);
-                state.specimen = { id: created.id, name: created.name };
+                const created     = await API.specimens.upsert(inferred);
+                const wasUpdating = !!state.specimen;
+                state.specimen    = { id: created.id, name: created.name };
+                _specimenWasInferred = true;
                 document.getElementById('specimen-input').value = created.name;
                 updateHeaderContext();
                 fetchSuggestions();
-                toast(`Specimen inferred: ${created.name}`, 'blue');
+                if (wasUpdating) {
+                    toast(`Specimen updated: ${created.name}`, 'blue');
+                } else {
+                    maybeSavePendingTemplate(); // first inference — now submit raw template
+                    toast(`Specimen inferred: ${created.name}`, 'blue');
+                }
             } catch {}
-        }, 800); // debounce — only fires 800ms after user stops typing
+        }, 800); // debounce — only fires 800 ms after user stops typing
     }
 
     // Check if the gross appears complete (no unfilled placeholders remain)
@@ -535,7 +559,7 @@ const App = (() => {
     // Auto-copies to clipboard when all fields are filled.
     function checkCompletion() {
         const text = document.getElementById('dictation').value;
-        const hasUnfilled = /\[[^\]]{0,60}\]/.test(text); // any [...] remaining
+        const hasUnfilled = /\[[^\]]+\]/.test(text); // any [...] remaining
         const hasContent  = text.trim().length > 50;
         const complete    = !hasUnfilled && hasContent && !state.submitted;
 
@@ -554,7 +578,7 @@ const App = (() => {
             clearTimeout(_autoCopyTimer);
             _autoCopyTimer = setTimeout(() => {
                 const t = document.getElementById('dictation').value;
-                if (!/\[[^\]]{0,60}\]/.test(t) && t.trim().length > 50) {
+                if (!/\[[^\]]+\]/.test(t) && t.trim().length > 50) {
                     navigator.clipboard?.writeText(t).then(() => {
                         _autoCopied = true;
                         toast('All fields complete \u2014 copied to clipboard \u2713', 'green');
@@ -597,7 +621,7 @@ const App = (() => {
         scanTermUsage();
         checkCompletion();
         refreshFieldCounter();
-        toast(`Undo: ${snap.label || 'change'}`, '');
+        toast('Undone', '');
         return true;
     }
 
@@ -683,11 +707,12 @@ const App = (() => {
         state.termsUsed   = [];
         state.submitted   = false;
 
-        // Reset undo stack, auto-copy guard, and pending template
-        _undoStack.length   = 0;
-        _autoCopied         = false;
+        // Reset undo stack, auto-copy guard, pending template, and inference flag
+        _undoStack.length    = 0;
+        _autoCopied          = false;
+        _specimenWasInferred = false;
         clearTimeout(_autoCopyTimer);
-        _pendingRawTemplate = null;
+        _pendingRawTemplate  = null;
         try { localStorage.removeItem('grossapp-pending-template'); } catch {}
 
         // Reset field tracking
@@ -782,7 +807,7 @@ const App = (() => {
                 const text = await navigator.clipboard.readText();
                 if (text !== _clipText) {
                     _clipText        = text;
-                    _clipHasTemplate = text.length > 20 && /\[[^\]]{0,60}\]/.test(text);
+                    _clipHasTemplate = text.length > 20 && /\[[^\]]+\]/.test(text);
                     updatePasteBtn();
                 }
             } catch { /* no focus or permission denied */ }
@@ -819,7 +844,7 @@ const App = (() => {
         ta.focus();
 
         // Save raw template immediately (before any edits)
-        if (/\[[^\]]{0,60}\]/.test(text)) {
+        if (/\[[^\]]+\]/.test(text)) {
             _pendingRawTemplate = text;
             try { localStorage.setItem('grossapp-pending-template', text); } catch {}
         }
@@ -917,7 +942,7 @@ const App = (() => {
     // Returns array of all [...] fields in `text` with start/end indices
     function findAllFields(text) {
         const out = [];
-        const re  = /\[[^\]]{0,60}\]/g;
+        const re  = /\[[^\]]+\]/g;
         let m;
         while ((m = re.exec(text)) !== null) {
             out.push({ start: m.index, end: m.index + m[0].length });
