@@ -1,6 +1,7 @@
 {
   "name": "A1",
   "short_name": "A1",
+  "start_url": "/",
   "icons": [
     {
       "src": "/web-app-manifest-192x192.png",
@@ -15,7 +16,7 @@
       "purpose": "maskable"
     }
   ],
-  "theme_color": "#ffffff",
+  "theme_color": "#f4f6f9",
   "background_color": "#ffffff",
   "display": "standalone"
 }
