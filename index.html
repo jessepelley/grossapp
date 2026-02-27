@@ -733,6 +733,70 @@ html, body {
     font-style: italic;
 }
 
+/* ── History tape modal ──────────────────────────────────────────────────── */
+.history-modal-overlay {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,.45);
+    z-index: 300;
+    display: flex; align-items: center; justify-content: center;
+}
+.history-modal {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: var(--shadow-md);
+    width: 560px; max-width: 96vw;
+    max-height: 80vh;
+    display: flex; flex-direction: column;
+    overflow: hidden;
+}
+.history-modal-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+}
+.history-modal-title {
+    font-weight: 600; font-size: 13px; color: var(--text);
+}
+.history-modal-hint {
+    font-size: 11px; color: var(--muted2);
+    padding: 6px 16px 0;
+    flex-shrink: 0;
+}
+.history-tape-list {
+    overflow-y: auto;
+    flex: 1;
+    padding: 4px 0 8px;
+}
+/* Each history row */
+.hst-entry {
+    display: grid;
+    grid-template-columns: 78px 130px 90px auto;
+    align-items: center;
+    padding: 5px 16px;
+    cursor: pointer;
+    border-left: 3px solid transparent;
+    font-family: 'Source Code Pro', monospace;
+    font-size: 11px;
+    color: var(--text2);
+    transition: background .1s;
+}
+.hst-entry:hover          { background: var(--accent-dim); }
+.hst-entry.hst-active     { background: var(--accent-dim); border-left-color: var(--accent); color: var(--text); }
+.hst-entry.hst-unsaved    { opacity: .65; font-style: italic; cursor: default; }
+.hst-time   { color: var(--muted2); font-size: 11px; }
+.hst-label  { color: var(--text2); }
+.hst-diff   { display: flex; gap: 6px; }
+.hst-plus   { color: var(--green); font-weight: 600; }
+.hst-minus  { color: var(--red);   font-weight: 600; }
+.hst-nodiff { color: var(--muted2); }
+.hst-len    { color: var(--muted2); text-align: right; justify-self: end; }
+.hst-empty  {
+    padding: 24px 16px; text-align: center;
+    color: var(--muted2); font-style: italic; font-size: 12px;
+}
+
 /* Paste button */
 .btn.paste-btn.has-template {
     border-color: var(--green);
@@ -852,6 +916,11 @@ html, body {
           onmousedown="event.preventDefault()"
           title="Redo last change (Ctrl+Y)">
           Redo ↪
+        </button>
+        <button class="btn" onclick="App.openHistoryModal()"
+          onmousedown="event.preventDefault()"
+          title="View change history tape">
+          History
         </button>
 
         <!-- Paste from clipboard -->
@@ -988,5 +1057,22 @@ and auto-advance cassette block labels as you work."></textarea>
 <script src="js/cassette.js?v=2.0"></script>
 <script src="js/api.js?v=2.0"></script>
 <script src="js/app.js?v=2.0"></script>
+
+<!-- ── History tape modal ─────────────────────────────────────────────── -->
+<div id="history-modal-overlay" class="history-modal-overlay" style="display:none"
+     onclick="App.closeHistoryModal()">
+  <div class="history-modal" onclick="event.stopPropagation()">
+    <div class="history-modal-header">
+      <span class="history-modal-title">Change History</span>
+      <button class="btn" onclick="App.closeHistoryModal()"
+        onmousedown="event.preventDefault()"
+        style="padding:2px 8px">✕</button>
+    </div>
+    <div class="history-modal-hint">
+      Most recent first &mdash; click any entry to restore that state &mdash; Undo/Redo navigates this tape
+    </div>
+    <div id="history-tape-list" class="history-tape-list"></div>
+  </div>
+</div>
 </body>
 </html>
