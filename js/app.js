@@ -32,24 +32,19 @@ const App = (() => {
         // Cassette automation
         Cassette.init(ta);
         // Capture state just before any input for cassette:advance undo
+        // Word-boundary snapshots: capture text BEFORE the boundary char is inserted
+        // so undo/redo navigates word-by-word, not char-by-char.
         ta.addEventListener('beforeinput', (e) => {
-            _preInputState = { text: ta.value, s: ta.selectionStart, e: ta.selectionEnd };
-            // Push undo snapshot at word boundaries for word-processor-like granularity
-            if (_undoPushAtNextInput) {
-                pushUndo('idle', ta.value, { s: ta.selectionStart, e: ta.selectionEnd });
-                _undoPushAtNextInput = false;
-            } else if (e.inputType === 'insertText' && (e.data === ' ' || e.data === '\n')) {
-                pushUndo('word', ta.value, { s: ta.selectionStart, e: ta.selectionEnd });
+            if (e.inputType === 'insertText' && (e.data === ' ' || e.data === '\n')) {
+                recordSnapshot('word');
             } else if (e.inputType === 'insertLineBreak' || e.inputType === 'insertParagraph') {
-                pushUndo('line', ta.value, { s: ta.selectionStart, e: ta.selectionEnd });
+                recordSnapshot('word');
             }
         });
         ta.addEventListener('cassette:advance', (e) => {
-            // Push the pre-advance state so undo can reverse auto-inserted blocks
-            if (_preInputState) {
-                pushUndo('block insert', _preInputState.text, { s: _preInputState.s, e: _preInputState.e });
-                _preInputState = null;
-            }
+            // Snapshot the post-insert state for undo/history
+            clearTimeout(_snapshotTimer);
+            recordSnapshot('block');
             // Cancel any pending auto-advance so it doesn't steal cursor from the block label
             fieldAdv.anchor = -1;
             clearTimeout(fieldAdv.timer);
@@ -59,15 +54,25 @@ const App = (() => {
         });
 
         // Live footer + block map on any input
-        ta.addEventListener('input', () => {
-            // Debounced localStorage draft save
-            clearTimeout(_draftSaveTimer);
-            _draftSaveTimer = setTimeout(() => {
-                try { localStorage.setItem('grossapp-dictation-draft', ta.value); } catch {}
-            }, 300);
-            // Idle typing timer — after 2s of no input, flag to push undo snapshot before next input
-            clearTimeout(_undoTypingTimer);
-            _undoTypingTimer = setTimeout(() => { _undoPushAtNextInput = true; }, 2000);
+        ta.addEventListener('input', (e) => {
+            if (!_restoringFromHistory) {
+                // Debounced localStorage draft save
+                clearTimeout(_draftSaveTimer);
+                _draftSaveTimer = setTimeout(() => {
+                    try { localStorage.setItem('grossapp-dictation-draft', ta.value); } catch {}
+                }, 300);
+                // History snapshot strategy:
+                // • paste / drop  → 50 ms (let DOM settle)
+                // • word boundary → immediate (captured before-insert in beforeinput; idle below catches post-insert)
+                // • everything else (delete, replace, composition) → 800 ms idle
+                if (e.inputType === 'insertFromPaste' || e.inputType === 'insertFromDrop') {
+                    clearTimeout(_snapshotTimer);
+                    _snapshotTimer = setTimeout(() => recordSnapshot('paste'), 50);
+                } else {
+                    clearTimeout(_snapshotTimer);
+                    _snapshotTimer = setTimeout(() => recordSnapshot('typed'), 800);
+                }
+            }
             updateFooter();
             updateBlockMap();
             scanTermUsage();
@@ -89,9 +94,8 @@ const App = (() => {
             }
         });
 
-        // Detect template on paste; save undo snapshot and reset field tracking
+        // Detect template on paste; reset field tracking (snapshot handled by input event)
         ta.addEventListener('paste', () => {
-            pushUndo('paste', ta.value, { s: ta.selectionStart, e: ta.selectionEnd });
             setTimeout(() => {
                 detectFromPaste();
                 fieldAdv.anchor = -1;
@@ -258,6 +262,11 @@ const App = (() => {
             (row) => ({ label: row.label, meta: row.use_count ? `${row.use_count}×` : '' })
         );
 
+        // Close history modal on Escape
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') closeHistoryModal();
+        });
+
         // Restore saved draft unconditionally on load (prevents information loss on reload)
         const savedDraft = localStorage.getItem('grossapp-dictation-draft');
         if (savedDraft) {
@@ -266,6 +275,7 @@ const App = (() => {
             updateBlockMap();
             refreshFieldCounter();
             updateCopyBtn();
+            recordSnapshot('draft'); // seed history with restored state
         }
 
         // Sync footer and Next button to loaded preferences
@@ -694,81 +704,184 @@ const App = (() => {
         }
     }
 
-    // ── Undo/redo history (snapshot-based, word-boundary granularity) ─────────
+    // ── History tape (unified undo/redo + viewer) ─────────────────────────────
+    // Each entry: { text: string, timestamp: Date, label: string }
+    // _historyIdx points to the entry we're currently "at"; -1 = empty tape.
 
-    const _undoStack         = [];
-    const _redoStack         = [];
-    const _MAX_UNDO          = 100;
-    let   _preInputState     = null;  // captured by beforeinput, used by cassette:advance
-    let   _undoTypingTimer   = null;  // idle timer for undo snapshot on typing pause
-    let   _undoPushAtNextInput = false; // flag: push undo snapshot before next input
+    const _historyTape          = [];
+    let   _historyIdx           = -1;
+    const _MAX_HISTORY          = 500;
+    let   _snapshotTimer        = null;   // debounce for idle-typed snapshots
+    let   _restoringFromHistory = false;  // guard: suppress snapshot during restore
 
-    function pushUndo(label, text, sel) {
+    // Record a snapshot of the current textarea value.
+    function recordSnapshot(label) {
+        if (_restoringFromHistory) return;
+        const ta   = document.getElementById('dictation');
+        const text = ta.value;
+        // Deduplicate: skip if text is unchanged from head
+        if (_historyIdx >= 0 && _historyTape[_historyIdx].text === text) return;
+        // Truncate any future entries (discard redo branch)
+        if (_historyIdx < _historyTape.length - 1) {
+            _historyTape.splice(_historyIdx + 1);
+        }
+        _historyTape.push({ text, timestamp: new Date(), label });
+        _historyIdx = _historyTape.length - 1;
+        // Cap size by removing oldest entries
+        while (_historyTape.length > _MAX_HISTORY) {
+            _historyTape.shift();
+            _historyIdx--;
+        }
+    }
+
+    // Restore textarea to a specific snapshot (does not add to tape).
+    function restoreHistoryState(snap) {
         const ta = document.getElementById('dictation');
-        const t  = text !== undefined ? text : ta.value;
-        const s  = sel  !== undefined ? sel  : { s: ta.selectionStart, e: ta.selectionEnd };
-        // Don't push duplicate state
-        if (_undoStack.length > 0 && _undoStack[_undoStack.length - 1].text === t) return;
-        _undoStack.push({ text: t, selStart: s.s, selEnd: s.e, label });
-        if (_undoStack.length > _MAX_UNDO) _undoStack.shift();
-        // Any new action clears the redo stack
-        _redoStack.length = 0;
+        _restoringFromHistory = true;
+        ta.value = snap.text;
+        ta.selectionStart = ta.selectionEnd = snap.text.length;
+        ta.focus();
+        _restoringFromHistory = false;
+        // Update UI — do NOT dispatch input event (would re-trigger cassette)
+        updateFooter(); updateBlockMap(); scanTermUsage();
+        checkCompletion(); refreshFieldCounter(); updateCopyBtn();
+        // Keep localStorage draft in sync
+        try { localStorage.setItem('grossapp-dictation-draft', snap.text); } catch {}
     }
 
     function undoAction() {
-        if (_undoStack.length === 0) { toast('Nothing to undo', ''); return false; }
-        const ta = document.getElementById('dictation');
-        // Save current state to redo stack before restoring
-        _redoStack.push({ text: ta.value, selStart: ta.selectionStart, selEnd: ta.selectionEnd, label: 'redo' });
-        if (_redoStack.length > _MAX_UNDO) _redoStack.shift();
-        const snap = _undoStack.pop();
-        ta.value          = snap.text;
-        ta.selectionStart = snap.selStart;
-        ta.selectionEnd   = snap.selEnd;
-        ta.focus();
-        // Update UI directly — do NOT dispatch input event (would re-trigger cassette)
-        updateFooter();
-        updateBlockMap();
-        scanTermUsage();
-        checkCompletion();
-        refreshFieldCounter();
-        updateCopyBtn();
+        const ta  = document.getElementById('dictation');
+        const cur = ta.value;
+        // If there's unsaved work since the last snapshot, capture it first so redo can return
+        if (_historyIdx < 0 || cur !== _historyTape[_historyIdx].text) {
+            recordSnapshot('pre-undo');
+        }
+        if (_historyIdx <= 0) { toast('Nothing to undo', ''); return false; }
+        _historyIdx--;
+        restoreHistoryState(_historyTape[_historyIdx]);
         toast('Undone', '');
         return true;
     }
 
     function redoAction() {
-        if (_redoStack.length === 0) { toast('Nothing to redo', ''); return false; }
-        const ta = document.getElementById('dictation');
-        // Push current state to undo stack without clearing redo
-        const t = ta.value;
-        const s = { s: ta.selectionStart, e: ta.selectionEnd };
-        if (_undoStack.length === 0 || _undoStack[_undoStack.length - 1].text !== t) {
-            _undoStack.push({ text: t, selStart: s.s, selEnd: s.e, label: 'pre-redo' });
-            if (_undoStack.length > _MAX_UNDO) _undoStack.shift();
-        }
-        const snap = _redoStack.pop();
-        ta.value          = snap.text;
-        ta.selectionStart = snap.selStart;
-        ta.selectionEnd   = snap.selEnd;
-        ta.focus();
-        // Update UI directly — do NOT dispatch input event (would re-trigger cassette)
-        updateFooter();
-        updateBlockMap();
-        scanTermUsage();
-        checkCompletion();
-        refreshFieldCounter();
-        updateCopyBtn();
+        if (_historyIdx >= _historyTape.length - 1) { toast('Nothing to redo', ''); return false; }
+        _historyIdx++;
+        restoreHistoryState(_historyTape[_historyIdx]);
         toast('Redone', '');
         return true;
+    }
+
+    // ── History viewer ────────────────────────────────────────────────────────
+
+    function openHistoryModal() {
+        const overlay = document.getElementById('history-modal-overlay');
+        if (!overlay) return;
+        renderHistoryTape();
+        overlay.style.display = 'flex';
+    }
+
+    function closeHistoryModal() {
+        const overlay = document.getElementById('history-modal-overlay');
+        if (overlay) overlay.style.display = 'none';
+    }
+
+    function renderHistoryTape() {
+        const list = document.getElementById('history-tape-list');
+        if (!list) return;
+        list.innerHTML = '';
+
+        if (_historyTape.length === 0) {
+            list.innerHTML = '<div class="hst-empty">No history yet — start typing</div>';
+            return;
+        }
+
+        const ta          = document.getElementById('dictation');
+        const currentText = ta.value;
+        const headText    = _historyTape[_historyIdx] ? _historyTape[_historyIdx].text : null;
+
+        // Show unsaved "current" state at top if text has diverged from head snapshot
+        if (headText !== null && currentText !== headText) {
+            const stats = diffStats(headText, currentText);
+            const el    = document.createElement('div');
+            el.className = 'hst-entry hst-unsaved';
+            el.innerHTML = _buildEntryHTML('now', 'unsaved', stats, currentText.length);
+            el.title = 'Current unsaved state (not yet a snapshot)';
+            list.appendChild(el);
+        }
+
+        // Entries in reverse chronological order (most recent first, like git log)
+        for (let i = _historyTape.length - 1; i >= 0; i--) {
+            const entry = _historyTape[i];
+            const prev  = i > 0 ? _historyTape[i - 1] : null;
+            const stats = prev
+                ? diffStats(prev.text, entry.text)
+                : { added: entry.text.length, removed: 0 };
+
+            const el = document.createElement('div');
+            el.className = 'hst-entry' + (i === _historyIdx ? ' hst-active' : '');
+            el.innerHTML = _buildEntryHTML(
+                _fmtHistTime(entry.timestamp),
+                _fmtHistLabel(entry.label),
+                stats,
+                entry.text.length
+            );
+            el.dataset.idx = i;
+            el.title = i === _historyIdx ? 'Current position' : 'Click to restore this state';
+            el.addEventListener('click', () => restoreHistoryEntry(i));
+            list.appendChild(el);
+        }
+    }
+
+    function _buildEntryHTML(time, label, stats, charCount) {
+        const addedHtml   = stats.added   > 0 ? `<span class="hst-plus">+${stats.added}</span>`   : '';
+        const removedHtml = stats.removed > 0 ? `<span class="hst-minus">−${stats.removed}</span>` : '';
+        const noneHtml    = stats.added === 0 && stats.removed === 0 ? '<span class="hst-nodiff">·</span>' : '';
+        return `<span class="hst-time">${time}</span>` +
+               `<span class="hst-label">${label}</span>` +
+               `<span class="hst-diff">${addedHtml}${removedHtml}${noneHtml}</span>` +
+               `<span class="hst-len">${charCount}&thinsp;c</span>`;
+    }
+
+    function diffStats(oldText, newText) {
+        // Fast prefix/suffix heuristic: find changed region, count added vs removed chars
+        let s = 0;
+        while (s < oldText.length && s < newText.length && oldText[s] === newText[s]) s++;
+        let oe = oldText.length, ne = newText.length;
+        while (oe > s && ne > s && oldText[oe - 1] === newText[ne - 1]) { oe--; ne--; }
+        return { added: ne - s, removed: oe - s };
+    }
+
+    function restoreHistoryEntry(idx) {
+        if (idx < 0 || idx >= _historyTape.length) return;
+        _historyIdx = idx;
+        restoreHistoryState(_historyTape[idx]);
+        toast('Restored \u2014 ' + _fmtHistTime(_historyTape[idx].timestamp), 'blue');
+        renderHistoryTape(); // refresh to update current marker
+    }
+
+    function _fmtHistTime(date) {
+        return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    }
+
+    function _fmtHistLabel(label) {
+        return ({
+            typed:      'typed',
+            word:       'word boundary',
+            paste:      'paste',
+            clipboard:  'clipboard paste',
+            block:      'block insert',
+            draft:      'draft loaded',
+            'pre-undo': 'pre-undo',
+            'new case': 'new case',
+            'new specimen': 'new specimen',
+        })[label] || label;
     }
 
     // ── Cassette button handlers ──────────────────────────────────────────────
     function newBlock() {
         const ta = document.getElementById('dictation');
-        pushUndo('block insert');
-        Cassette.handleNewBlock(ta);
-        fieldAdv.anchor = -1;         // Cancel pending auto-advance so cursor stays at block label
+        Cassette.handleNewBlock(ta); // fires cassette:advance which calls recordSnapshot('block')
+        fieldAdv.anchor = -1;        // cancel pending auto-advance so cursor stays at block label
         clearTimeout(fieldAdv.timer);
         updateFooter();
         updateBlockMap();
@@ -793,8 +906,9 @@ const App = (() => {
         state.termsUsed   = [];
         state.submitted   = false;
 
-        _undoStack.length    = 0;
-        _redoStack.length    = 0;
+        _historyTape.length  = 0;
+        _historyIdx          = -1;
+        clearTimeout(_snapshotTimer);
         _autoCopied          = false;
         _specimenWasInferred = false;
         clearTimeout(_autoCopyTimer);
@@ -813,6 +927,7 @@ const App = (() => {
         updateFieldAdvStatus();
         updateCopyBtn();
         checkCompletion();
+        recordSnapshot('new specimen'); // mark start of new specimen in history
         toast('Ready for next specimen \u2014 history retained', 'blue');
     }
 
@@ -885,9 +1000,10 @@ const App = (() => {
         state.termsUsed   = [];
         state.submitted   = false;
 
-        // Reset undo stack, auto-copy guard, pending template, and inference flag
-        _undoStack.length    = 0;
-        _redoStack.length    = 0;
+        // Reset history tape, auto-copy guard, pending template, and inference flag
+        _historyTape.length  = 0;
+        _historyIdx          = -1;
+        clearTimeout(_snapshotTimer);
         _autoCopied          = false;
         _specimenWasInferred = false;
         clearTimeout(_autoCopyTimer);
@@ -907,6 +1023,7 @@ const App = (() => {
         updateFieldAdvStatus();
         updateCopyBtn();
         checkCompletion();
+        recordSnapshot('new case'); // mark start of new case in history
     }
 
     // ── Collapsible sidebar sections ──────────────────────────────────────────
@@ -1022,11 +1139,12 @@ const App = (() => {
         if (!text.trim()) { toast('Clipboard is empty', ''); return; }
 
         const ta = document.getElementById('dictation');
-        pushUndo('clipboard paste'); // save current state so Undo can reverse
+        clearTimeout(_snapshotTimer); // cancel idle, snapshot after paste
 
         ta.value = text;
         ta.selectionStart = ta.selectionEnd = 0;
         ta.focus();
+        recordSnapshot('clipboard'); // capture post-paste state in history
 
         // Save raw template immediately (before any edits)
         if (/\[[^\]]*\]/.test(text)) {
@@ -1425,7 +1543,8 @@ const App = (() => {
         toggleSection, detectFromPaste,
         toggleTheme, toggleFormat,
         goToNextField, goPrevField, toggleAutoAdvance, toggleFieldPrefs,
-        pasteFromClipboard
+        pasteFromClipboard,
+        openHistoryModal, closeHistoryModal, restoreHistoryEntry
     };
 
 })();
