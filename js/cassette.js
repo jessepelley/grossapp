@@ -51,8 +51,10 @@ const Cassette = (() => {
     // Placeholder at start of line: [___]-  [   ]-  [ ]-
     const PLACEHOLDER_LINE_PATTERN = /^(\[[\s_]*\])([\t\-\u2013\u2014]|:\s?|\s)/;
 
-    // Specimen header: "B. The specimen is received"
+    // Specimen header (LN): "B. The specimen is received"
     const SPECIMEN_HEADER_PATTERN = /^([A-Z])\.\s+[Tt]he specimen is received/;
+    // Specimen header (NL): "2. The specimen is received"
+    const SPECIMEN_HEADER_PATTERN_NL = /^(\d+)\.\s+[Tt]he specimen is received/;
 
     // ── Number-Letter helpers ─────────────────────────────────────────────────
 
@@ -236,6 +238,12 @@ const Cassette = (() => {
     /**
      * Find last effective cassette block above upToPos.
      * Skips indented sub-lines and placeholder lines.
+     *
+     * Special case: when a specimen header line ("B. The specimen…" or
+     * "2. The specimen…") is found before any cassette block, a synthetic
+     * "seed" block is returned so the first block label of that specimen
+     * is generated correctly (e.g. B1 or 2A) rather than continuing the
+     * numbering from the previous specimen.
      */
     function findLastBlock(textarea, upToPos) {
         const pos   = upToPos !== undefined ? upToPos : textarea.selectionStart;
@@ -245,6 +253,38 @@ const Cassette = (() => {
             const line = lines[i];
             if (/^[\s\t]/.test(line)) continue;
             if (PLACEHOLDER_LINE_PATTERN.test(line)) continue;
+
+            // ── Specimen header as seed block ─────────────────────────────────
+            // Matches lines like "A. The specimen" (LN) or "1. The specimen" (NL).
+            // Synthesise a block-0 so nextPrefix() produces the right first label.
+            if (_format === FORMAT_LN) {
+                const hm = line.match(/^([A-Z])\.\s+[Tt]he specimen/);
+                if (hm) {
+                    return {
+                        parsed: {
+                            specimen:  hm[1],  letter: hm[1],
+                            suffix:    0,      number: 0,   // nextPrefix → letter + (0+1) = letter1
+                            separator: '-',    raw: '',
+                            isRange:   false
+                        },
+                        lineIndex: i
+                    };
+                }
+            } else {
+                const hm = line.match(/^(\d+)\.\s+[Tt]he specimen/);
+                if (hm) {
+                    return {
+                        parsed: {
+                            specimen:  hm[1],
+                            suffix:    '',     // nextLetterSuffix('') → 'A'  → specNum + 'A'
+                            separator: '-',    raw: '',
+                            isRange:   false
+                        },
+                        lineIndex: i
+                    };
+                }
+            }
+
             const parsed = parseBlockLine(line);
             if (parsed) return { parsed, lineIndex: i };
         }

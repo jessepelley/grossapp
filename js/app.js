@@ -19,6 +19,21 @@ const App = (() => {
         format:      'letter-number' // 'letter-number' | 'number-letter'
     };
 
+    // ── Rapid mode helper — is the last field in the textarea selected? ────────
+    function isAnchorFieldSelected(ta) {
+        const text   = ta.value;
+        const start  = ta.selectionStart;
+        const end    = ta.selectionEnd;
+        if (start >= end) return false;
+        // Selection must look like a bracketed field
+        if (text[start] !== '[' || text[end - 1] !== ']') return false;
+        // Must be the very last [___] in the document
+        const fields    = findAllFields(text);
+        if (fields.length === 0) return false;
+        const lastField = fields[fields.length - 1];
+        return start === lastField.start && end === lastField.end;
+    }
+
     // ── Init ──────────────────────────────────────────────────────────────────
     function init() {
         const ta = document.getElementById('dictation');
@@ -28,6 +43,9 @@ const App = (() => {
         const savedFormat = localStorage.getItem('grossapp-format') || 'letter-number';
         applyTheme(savedTheme);
         applyFormat(savedFormat);
+
+        // Rapid mode — load persisted state (before Cassette.init so UI is correct)
+        Rapid.load();
 
         // Cassette automation
         Cassette.init(ta);
@@ -51,6 +69,14 @@ const App = (() => {
             toast(`Block: ${e.detail.prefix}`, 'blue');
             updateFooter();
             updateBlockMap();
+
+            // ── Rapid mode: move cursor LEFT of the separator ─────────────────
+            // When a [___]- placeholder is filled in rapid mode, place the cursor
+            // before the separator so the user can extend the range (e.g. A1-A3).
+            // Auto-advance is already paused (fieldAdv.anchor = -1 above).
+            if (Rapid.isActive() && e.detail.wasPlaceholder) {
+                Rapid.onCassetteBlock(ta, e.detail.prefix);
+            }
         });
 
         // Live footer + block map on any input
@@ -448,6 +474,7 @@ const App = (() => {
     let suggestionDebounce = null;
 
     async function fetchSuggestions() {
+        if (Rapid.isActive()) return;  // no API calls in rapid mode
         if (!state.specimen) return;
         clearTimeout(suggestionDebounce);
         suggestionDebounce = setTimeout(async () => {
@@ -549,8 +576,23 @@ const App = (() => {
 
     // ── Paste / template detection ────────────────────────────────────────────
     async function detectFromPaste() {
-        const text = document.getElementById('dictation').value;
+        const ta   = document.getElementById('dictation');
+        const text = ta.value;
         if (!text.trim()) return;
+
+        // ── Rapid mode: save template and apply first specimen immediately ─────
+        if (Rapid.isActive()) {
+            if (text.length > 5) {
+                Rapid.saveTemplate(text);
+                Rapid.applyFirst(ta);
+                recordSnapshot('rapid-template');
+                // Advance to the first [___] field of the new specimen
+                setTimeout(() => goToNextField(0), 60);
+            }
+            updateFooter();
+            updateBlockMap();
+            return; // skip all API calls
+        }
 
         // Save raw template to localStorage immediately (before edits), so it
         // can be submitted to the backend once a specimen is set.
@@ -624,6 +666,7 @@ const App = (() => {
     let _specimenWasInferred = false; // true when specimen came from auto-inference
 
     function maybeInferSpecimen() {
+        if (Rapid.isActive()) return;  // no inference in rapid mode
         // Only skip if the specimen was set manually by the user
         if (state.specimen && !_specimenWasInferred) return;
         clearTimeout(_inferTimer);
@@ -941,6 +984,11 @@ const App = (() => {
 
     // ── Case submission ───────────────────────────────────────────────────────
     async function submitCase() {
+        if (Rapid.isActive()) {
+            copyToClipboard();
+            toast('Rapid mode — copied to clipboard. Paste into APIS.', 'green');
+            return;
+        }
         if (!state.specimen) { toast('Select a specimen first', ''); return; }
         const gross = document.getElementById('dictation').value.trim();
         if (gross.length < 10) { toast('Gross description is too short', ''); return; }
@@ -1010,6 +1058,9 @@ const App = (() => {
         _pendingRawTemplate  = null;
         try { localStorage.removeItem('grossapp-pending-template'); } catch {}
         try { localStorage.removeItem('grossapp-dictation-draft'); } catch {}
+
+        // Reset rapid mode specimen index (keep template for reuse)
+        Rapid.reset();
 
         // Reset field tracking
         fieldAdv.anchor    = -1;
@@ -1081,6 +1132,49 @@ const App = (() => {
         const next = state.format === Cassette.FORMAT_NL ? Cassette.FORMAT_LN : Cassette.FORMAT_NL;
         applyFormat(next);
         toast(`Format: ${next === Cassette.FORMAT_NL ? '1A 1B 1C…' : 'A1 A2 A3…'}`, 'blue');
+    }
+
+    // ── Rapid mode toggle ─────────────────────────────────────────────────────
+    function toggleRapidMode() {
+        const ta     = document.getElementById('dictation');
+        const active = Rapid.toggle();
+
+        if (active) {
+            // Force auto-advance ON when entering rapid mode
+            if (!fieldAdv.auto) {
+                fieldAdv.auto = true;
+                saveFieldPrefs();
+                updateNextBtn();
+            }
+
+            const existingText = ta.value.trim();
+            const savedTmpl    = Rapid.getTemplate();
+
+            if (existingText && !savedTmpl) {
+                // Treat current textarea content as the rapid template
+                Rapid.saveTemplate(ta.value);
+                Rapid.applyFirst(ta);
+                recordSnapshot('rapid-template');
+                setTimeout(() => goToNextField(0), 60);
+                toast('Rapid mode ON — template saved from current content', 'green');
+            } else if (!existingText && savedTmpl) {
+                // Empty textarea but saved template exists — apply it
+                Rapid.applyFirst(ta);
+                recordSnapshot('rapid-template');
+                setTimeout(() => goToNextField(0), 60);
+                toast('Rapid mode ON — template applied', 'green');
+            } else if (existingText && savedTmpl) {
+                toast('Rapid mode ON — paste a new template or press ▶ Next to continue', 'green');
+            } else {
+                toast('Rapid mode ON — paste your template to begin', 'green');
+            }
+            updateFooter();
+            updateBlockMap();
+        } else {
+            // Turning off
+            clearTimeout(fieldAdv.timer);
+            toast('Rapid mode OFF', '');
+        }
     }
 
     // ── Clipboard / Paste ─────────────────────────────────────────────────────
@@ -1171,6 +1265,7 @@ const App = (() => {
     }
 
     async function maybeSavePendingTemplate() {
+        if (Rapid.isActive()) return;  // no API calls in rapid mode
         if (!state.specimen) return;
         if (!_pendingRawTemplate) {
             try { _pendingRawTemplate = localStorage.getItem('grossapp-pending-template') || null; } catch {}
@@ -1257,7 +1352,36 @@ const App = (() => {
     // Navigate cursor to the next [...] field, wrapping around if needed.
     // `fromPos` defaults to current selectionEnd.
     function goToNextField(fromPos) {
-        const ta     = document.getElementById('dictation');
+        const ta = document.getElementById('dictation');
+
+        // ── Rapid mode: anchor field triggers next-specimen append ────────────
+        // If the anchor (last [___] in the document) is currently selected,
+        // pressing Next appends the next specimen block instead of wrapping.
+        if (Rapid.isActive() && isAnchorFieldSelected(ta)) {
+            if (!Rapid.getTemplate()) { toast('No rapid template saved', ''); return false; }
+            recordSnapshot('rapid-specimen');
+            Rapid.appendNext(ta);
+            updateFooter();
+            updateBlockMap();
+            refreshFieldCounter();
+            recordSnapshot('rapid-next');
+            toast(`Specimen ${Rapid.specimenLabel(Rapid.getSpecimenIdx())} — continue filling`, 'blue');
+            // Advance to the first field of the newly appended specimen
+            const newFrom   = ta.selectionStart;
+            const text2     = ta.value;
+            const fields2   = findAllFields(text2);
+            const firstNew  = fields2.find(f => f.start >= newFrom);
+            if (firstNew) {
+                ta.setSelectionRange(firstNew.start, firstNew.end);
+                ta.focus();
+                fieldAdv.anchor    = firstNew.start;
+                fieldAdv.watchBack = false;
+                clearTimeout(fieldAdv.timer);
+                updateFieldCounter(fields2.indexOf(firstNew) + 1, fields2.length);
+            }
+            return true;
+        }
+
         const text   = ta.value;
         const from   = fromPos !== undefined ? fromPos : ta.selectionEnd;
         const fields = findAllFields(text);
@@ -1368,6 +1492,19 @@ const App = (() => {
         const ta     = document.getElementById('dictation');
         const text   = ta.value;
         const cursor = ta.selectionEnd;
+
+        // ── Rapid mode: pause at the anchor (last field) ──────────────────────
+        // When the cursor is inside or at the anchor [___] at the bottom,
+        // do not schedule auto-advance — the user must press ▶ Next explicitly.
+        if (Rapid.isActive()) {
+            const fields    = findAllFields(text);
+            const lastField = fields.length > 0 ? fields[fields.length - 1] : null;
+            if (lastField && cursor >= lastField.start && cursor <= lastField.end) {
+                clearTimeout(fieldAdv.timer);
+                updateFieldAdvStatus();
+                return;
+            }
+        }
 
         // If cursor is still inside a [...], the field isn't filled yet
         if (isCursorInField(text, cursor)) {
@@ -1504,6 +1641,16 @@ const App = (() => {
         const el = document.getElementById('field-adv-status');
         if (!el) return;
 
+        // ── Rapid mode: show anchor hint ──────────────────────────────────────
+        if (Rapid.isActive()) {
+            const ta2 = document.getElementById('dictation');
+            if (isAnchorFieldSelected(ta2)) {
+                const nextLabel = Rapid.specimenLabel(Rapid.getSpecimenIdx() + 1);
+                el.textContent = `\u25b6 Next \u2192 Specimen ${nextLabel}`;
+                return;
+            }
+        }
+
         if (!fieldAdv.auto) { el.textContent = ''; return; }
 
         const ta     = document.getElementById('dictation');
@@ -1541,7 +1688,7 @@ const App = (() => {
         newBlock, newSpecimen, undoInsert, redoInsert,
         submitCase, copyToClipboard, clearAll,
         toggleSection, detectFromPaste,
-        toggleTheme, toggleFormat,
+        toggleTheme, toggleFormat, toggleRapidMode,
         goToNextField, goPrevField, toggleAutoAdvance, toggleFieldPrefs,
         pasteFromClipboard,
         openHistoryModal, closeHistoryModal, restoreHistoryEntry

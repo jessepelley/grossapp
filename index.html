@@ -810,6 +810,66 @@ html, body {
     50%       { box-shadow: 0 0 0 3px var(--green-dim); }
 }
 
+/* ── Rapid mode ──────────────────────────────────────────────────────────── */
+
+/* Header toggle button — off state inherits .hbtn.toggle */
+.hbtn.rapid-btn { font-size: 10px; padding: 4px 10px; opacity: .75; }
+.hbtn.rapid-btn:hover { opacity: 1; }
+
+/* Active state: bright amber accent to stand out from normal toggles */
+.hbtn.rapid-btn.rapid-active {
+    background: rgba(217,119,6,.75);
+    border-color: rgba(255,255,255,.6);
+    color: #fff;
+    opacity: 1;
+    animation: rapid-pulse 2s ease-in-out infinite;
+}
+@keyframes rapid-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(217,119,6,.4); }
+    50%       { box-shadow: 0 0 0 4px rgba(217,119,6,.2); }
+}
+
+/* Rapid sidebar section */
+#rapid-sidebar-section .sidebar-body {
+    padding: 10px 14px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+}
+#rapid-status {
+    font-family: 'Source Code Pro', monospace;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--yellow);
+    min-height: 16px;
+}
+.rapid-tmpl-preview {
+    font-family: 'Source Code Pro', monospace;
+    font-size: 10px;
+    color: var(--muted2);
+    white-space: pre-wrap;
+    max-height: 80px;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 5px 7px;
+    background: var(--surface2);
+    line-height: 1.55;
+}
+.rapid-hint {
+    font-size: 11px;
+    color: var(--muted2);
+    line-height: 1.5;
+}
+.rapid-hint code {
+    font-family: 'Source Code Pro', monospace;
+    font-size: 10px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 2px;
+    padding: 1px 4px;
+}
+
 </style>
 </head>
 <body>
@@ -834,6 +894,13 @@ html, body {
         onclick="App.toggleTheme()"
         title="Switch between light and dark mode">
         ☀ Light
+      </button>
+
+      <!-- Rapid mode toggle -->
+      <button class="hbtn rapid-btn" id="btn-rapid"
+        onclick="App.toggleRapidMode()"
+        title="Rapid mode — streamlined batch biopsy processing, no API calls">
+        ⚡ Rapid
       </button>
 
       <button class="hbtn"
@@ -1023,6 +1090,27 @@ and auto-advance cassette block labels as you work."></textarea>
         </div>
       </div>
 
+      <!-- Rapid mode info (hidden unless rapid mode is ON) -->
+      <div class="sidebar-section" id="rapid-sidebar-section" style="display:none">
+        <div class="sidebar-head">
+          <span class="sidebar-title">⚡ Rapid Mode</span>
+        </div>
+        <div class="sidebar-body">
+          <div id="rapid-status">Paste template to begin</div>
+          <div class="rapid-hint">
+            Paste your template to save it and start specimen&nbsp;1.<br>
+            Auto-advance walks through <code>[___]</code> fields.<br>
+            <code>[___]-suffix</code> lines get the cassette key; cursor lands left of <code>-</code> for range editing.<br>
+            When the bottom <code>[___]</code> is reached, press&nbsp;▶&nbsp;Next to append the next specimen.
+          </div>
+          <button class="btn full" onclick="App.copyToClipboard()"
+            style="margin-top:4px">
+            Copy all to clipboard
+            <sub>Paste back into APIS when done</sub>
+          </button>
+        </div>
+      </div>
+
       <!-- Controls -->
       <div class="sidebar-section">
         <div class="sidebar-head" onclick="App.toggleSection('controls')">
@@ -1056,6 +1144,7 @@ and auto-advance cassette block labels as you work."></textarea>
 <!-- bump version string on every JS deploy -->
 <script src="js/cassette.js?v=2.0"></script>
 <script src="js/api.js?v=2.0"></script>
+<script src="js/rapid.js?v=1.0"></script>
 <script src="js/app.js?v=2.0"></script>
 
 <!-- ── History tape modal ─────────────────────────────────────────────── -->
