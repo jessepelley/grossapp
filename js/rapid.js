@@ -1,18 +1,19 @@
 /**
- * rapid.js  v1.0
+ * rapid.js  v2.0
  * Rapid mode for batch biopsy specimen processing.
  * No API calls — pure local text manipulation.
  *
  * Workflow:
- *   1. Toggle rapid mode ON.
- *   2. Paste a template (e.g. "A. The specimen is received labeled …").
- *      The template is saved; the first specimen block is applied immediately.
- *   3. Auto-advance (always ON in rapid mode) walks the user through fields.
- *   4. When a line starting with [___]- is selected, the cassette key is
- *      auto-filled and the cursor lands LEFT of the separator so the user
- *      can extend the range (e.g. A1-A3) before moving on.
- *   5. After all fields are filled, auto-advance lands on the bottom anchor
- *      field [___].  Pressing ▶ Next appends the next specimen block.
+ *   1. Toggle rapid mode ON  →  layout switches (context bar + word cloud hidden).
+ *   2. Paste a template.  The template is saved and applied as specimen 1.
+ *      If the first line has no "A." / "1." header, one is prepended automatically.
+ *   3. Auto-advance (always ON) walks through [___] fields.
+ *   4. When a [___]-suffix line is auto-filled by cassette logic, the cursor
+ *      lands LEFT of the separator.  A timer fires after fieldAdv.delay to move
+ *      on automatically; if the user types to extend a range (e.g. -A3) the
+ *      timer resets each keystroke, then fires when they stop.
+ *   5. When there are no more [___] fields ahead of the cursor the next specimen
+ *      block is appended automatically — no button click required.
  *   6. When the case is done, Copy and paste back into APIS.
  *
  * Depends on: cassette.js (for Cassette.getFormat / FORMAT_NL)
@@ -23,14 +24,21 @@ const Rapid = (() => {
     // ── State ─────────────────────────────────────────────────────────────────
 
     let _active      = false;
-    let _template    = null;   // raw template text as saved by user
-    let _specimenIdx = 0;      // 0-based index of current (most recently appended) specimen
+    let _template    = null;   // raw template text (original unfilled paste)
+    let _specimenIdx = 0;      // 0-based index of most recently appended specimen
+
+    // Position just after the cassette separator when a [___]- line was filled.
+    // While non-null, onFieldInput in app.js debounces the advance timer instead
+    // of running normal field-tracking logic.
+    let _blockSepEnd = null;
 
     // ── Accessors ─────────────────────────────────────────────────────────────
 
     function isActive()       { return _active; }
     function getTemplate()    { return _template; }
     function getSpecimenIdx() { return _specimenIdx; }
+    function getBlockSepEnd() { return _blockSepEnd; }
+    function clearBlockSepEnd() { _blockSepEnd = null; }
 
     // ── Persistence ───────────────────────────────────────────────────────────
 
@@ -66,6 +74,7 @@ const Rapid = (() => {
         if (_active) {
             try { localStorage.setItem('grossapp-rapid', '1'); } catch {}
         } else {
+            _blockSepEnd = null;
             try { localStorage.removeItem('grossapp-rapid'); } catch {}
         }
         updateUI();
@@ -75,6 +84,9 @@ const Rapid = (() => {
     // ── UI ────────────────────────────────────────────────────────────────────
 
     function updateUI() {
+        // Apply / remove the layout class on <html> so CSS hides API-specific elements
+        document.documentElement.classList.toggle('rapid-mode', _active);
+
         const btn = document.getElementById('btn-rapid');
         if (btn) {
             btn.classList.toggle('rapid-active', _active);
@@ -97,23 +109,18 @@ const Rapid = (() => {
         if (!_template) {
             el.textContent = 'Paste template to begin';
         } else {
-            const label = specimenLabel(_specimenIdx);
-            el.textContent = `Active: Specimen ${label}`;
+            el.textContent = `Active: Specimen ${specimenLabel(_specimenIdx)}`;
         }
     }
 
     // ── Specimen label helpers ─────────────────────────────────────────────────
 
     /**
-     * Returns the dot-label for a specimen, e.g. "A." or "1."
-     * depending on the current cassette format.
+     * Returns the dot-label for a specimen, e.g. "A." (LN) or "1." (NL).
      */
     function specimenLabel(idx) {
         const fmt = (typeof Cassette !== 'undefined') ? Cassette.getFormat() : 'letter-number';
-        if (fmt === 'number-letter') {
-            return `${idx + 1}.`;
-        }
-        // letter-number: A., B., C. …  (wraps at Z to AA. etc. — practical cap ~26)
+        if (fmt === 'number-letter') return `${idx + 1}.`;
         return String.fromCharCode(65 + (idx % 26)) + '.';
     }
 
@@ -121,8 +128,8 @@ const Rapid = (() => {
 
     /**
      * Build the text for specimen `idx` by rewriting the first-line header.
-     * Handles both "A. rest-of-line" (LN) and "1. rest-of-line" (NL).
-     * If no header is detected the label is prepended.
+     * Handles "A. …" (LN), "1. …" (NL), or no header at all.
+     * All [___] fields are left blank (taken straight from _template).
      */
     function buildSpecimenBlock(idx) {
         if (!_template) return '';
@@ -138,6 +145,7 @@ const Rapid = (() => {
         } else if (mNL) {
             lines[0] = label + ' ' + firstLine.substring(mNL[0].length);
         } else {
+            // No header detected — prepend one
             lines[0] = label + ' ' + firstLine;
         }
         return lines.join('\n');
@@ -145,18 +153,16 @@ const Rapid = (() => {
 
     // ── Textarea operations ───────────────────────────────────────────────────
 
-    const ANCHOR = '[___]';
-
     /**
      * Apply the template as the first specimen (replaces all textarea content).
-     * Appends the anchor field at the bottom.
+     * No anchor field — end-of-specimen detection uses cursor position instead.
      */
     function applyFirst(ta) {
         if (!_template) return;
         _specimenIdx = 0;
+        _blockSepEnd = null;
         _persistIdx();
-        const block  = buildSpecimenBlock(0);
-        ta.value     = block + '\n' + ANCHOR;
+        ta.value = buildSpecimenBlock(0);
         ta.selectionStart = ta.selectionEnd = 0;
         ta.focus();
         ta.dispatchEvent(new Event('input', { bubbles: true }));
@@ -164,30 +170,22 @@ const Rapid = (() => {
     }
 
     /**
-     * Append the next specimen block.
-     * Removes the current anchor, appends the new block + new anchor.
-     * Positions the cursor at the start of the new block.
+     * Append the next specimen block after the current content.
+     * Positions cursor at the start of the new block so goToNextField
+     * in app.js can jump to the first [___] of that specimen.
      */
     function appendNext(ta) {
         if (!_template) return;
         _specimenIdx++;
+        _blockSepEnd = null;
         _persistIdx();
 
-        let current        = ta.value;
-        const anchorSuffix = '\n' + ANCHOR;
-        if (current.endsWith(anchorSuffix)) {
-            current = current.slice(0, -anchorSuffix.length);
-        } else if (current.endsWith(ANCHOR)) {
-            current = current.slice(0, -ANCHOR.length);
-        }
-
+        const base       = ta.value.trimEnd();
         const nextBlock  = buildSpecimenBlock(_specimenIdx);
-        const base       = current.trimEnd();
-        const newContent = base + '\n\n' + nextBlock + '\n' + ANCHOR;
-        ta.value         = newContent;
+        ta.value         = base + '\n\n' + nextBlock;
 
-        // Position cursor at start of new specimen block (after the two newlines)
-        const newBlockStart = base.length + 2;
+        // Cursor at start of new block so the caller can find the first field
+        const newBlockStart = base.length + 2; // after '\n\n'
         ta.selectionStart   = ta.selectionEnd = newBlockStart;
         ta.focus();
         ta.dispatchEvent(new Event('input', { bubbles: true }));
@@ -197,41 +195,45 @@ const Rapid = (() => {
     // ── Cassette block cursor adjustment ─────────────────────────────────────
 
     /**
-     * Called (from app.js cassette:advance handler) after cassette fills a
-     * [___]- placeholder line in rapid mode.
+     * Called after cassette fills a [___]- placeholder in rapid mode.
      *
-     * Moves the cursor to be LEFT of the separator so the user can extend the
-     * block range (e.g. type "-A3" to make "A1-A3") before moving on.
-     * e.g.  prefix = "A1-"  →  cursor lands between "A1" and "-"
-     *        prefix = "1A-"  →  cursor lands between "1A" and "-"
+     * 1. Moves cursor to be LEFT of the separator so the user can extend
+     *    the range (e.g. type "-A3" to get "A1-A3").
+     * 2. Stores _blockSepEnd so onFieldInput in app.js knows to debounce
+     *    the advance timer rather than running normal field logic.
+     *
+     * Returns the separator-end position (used by app.js to schedule the
+     * initial advance timer).
      */
     function onCassetteBlock(ta, prefix) {
-        if (!prefix) return;
+        if (!prefix) return null;
         const fmt = (typeof Cassette !== 'undefined') ? Cassette.getFormat() : 'letter-number';
 
         let blockLabelLen;
         if (fmt === 'number-letter') {
-            // "1A-"  "2AB-"  etc. — digits then letters
             const m = prefix.match(/^(\d+[A-Za-z]+)/);
             blockLabelLen = m ? m[1].length : Math.max(0, prefix.length - 1);
         } else {
-            // "A1-"  "B12-" etc. — one letter then digits
             const m = prefix.match(/^([A-Za-z]\d+)/);
             blockLabelLen = m ? m[1].length : Math.max(0, prefix.length - 1);
         }
 
         const sepLen = prefix.length - blockLabelLen;
         if (sepLen > 0) {
+            // cursor is currently after the full prefix; move it before the separator
             const newPos = ta.selectionStart - sepLen;
             ta.selectionStart = ta.selectionEnd = Math.max(0, newPos);
+            _blockSepEnd = newPos + sepLen; // = original cursor position
         }
+        return _blockSepEnd;
     }
 
     // ── Reset ─────────────────────────────────────────────────────────────────
 
-    /** Reset specimen index (keep template). Called on new case. */
+    /** Reset specimen index (keeps saved template). Called on new case. */
     function reset() {
         _specimenIdx = 0;
+        _blockSepEnd = null;
         _persistIdx();
         updateRapidStatus();
     }
@@ -243,9 +245,10 @@ const Rapid = (() => {
         saveTemplate, getTemplate, clearTemplate,
         specimenLabel, buildSpecimenBlock,
         applyFirst, appendNext,
-        onCassetteBlock, reset,
-        getSpecimenIdx, updateUI, updateRapidStatus,
-        ANCHOR
+        onCassetteBlock,
+        getBlockSepEnd, clearBlockSepEnd,
+        reset,
+        getSpecimenIdx, updateUI, updateRapidStatus
     };
 
 })();

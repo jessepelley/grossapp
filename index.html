@@ -810,6 +810,18 @@ html, body {
     50%       { box-shadow: 0 0 0 3px var(--green-dim); }
 }
 
+/* ── Rapid mode layout — hide API-specific elements ─────────────────────── */
+
+/* Collapse the context-bar grid row so the textarea fills that space */
+html.rapid-mode .app          { grid-template-rows: auto 1fr; }
+html.rapid-mode .context-bar  { display: none !important; }
+
+/* Hide word cloud sidebar section, + Specimen, Re-parse, Submit header btn */
+html.rapid-mode #sidebar-cloud-wrap  { display: none !important; }
+html.rapid-mode #btn-new-specimen    { display: none !important; }
+html.rapid-mode #btn-reparse         { display: none !important; }
+html.rapid-mode #btn-submit-header   { display: none !important; }
+
 /* ── Rapid mode ──────────────────────────────────────────────────────────── */
 
 /* Header toggle button — off state inherits .hbtn.toggle */
@@ -969,7 +981,7 @@ html, body {
           title="Insert the next block label. Also fires automatically when a new line is detected after a cassette entry.">
           + Block
         </button>
-        <button class="btn" onclick="App.newSpecimen()"
+        <button class="btn" id="btn-new-specimen" onclick="App.newSpecimen()"
           onmousedown="event.preventDefault()"
           title="Clear gross and specimen, keep clinical history for next specimen in this case.">
           + Specimen
@@ -1040,7 +1052,7 @@ html, body {
         </div>
 
         <div style="flex:1"></div>
-        <button class="btn" onclick="App.detectFromPaste()"
+        <button class="btn" id="btn-reparse" onclick="App.detectFromPaste()"
           onmousedown="event.preventDefault()"
           title="Re-scan the gross text: saves template to database, checks for filled-in specimen site, refreshes block map. Use after edits or if auto-detection missed on paste.">
           ⟳ Re-parse
@@ -1065,7 +1077,7 @@ and auto-advance cassette block labels as you work."></textarea>
     <div class="sidebar">
 
       <!-- Word cloud -->
-      <div class="sidebar-section">
+      <div class="sidebar-section" id="sidebar-cloud-wrap">
         <div class="sidebar-head" onclick="App.toggleSection('cloud')">
           <span class="sidebar-title">Grossing Terms</span>
           <span class="sidebar-toggle" id="toggle-cloud">▾</span>
@@ -1101,7 +1113,7 @@ and auto-advance cassette block labels as you work."></textarea>
             Paste your template to save it and start specimen&nbsp;1.<br>
             Auto-advance walks through <code>[___]</code> fields.<br>
             <code>[___]-suffix</code> lines get the cassette key; cursor lands left of <code>-</code> for range editing.<br>
-            When the bottom <code>[___]</code> is reached, press&nbsp;▶&nbsp;Next to append the next specimen.
+            When all fields are complete, the next specimen is appended automatically.
           </div>
           <button class="btn full" onclick="App.copyToClipboard()"
             style="margin-top:4px">

@@ -19,19 +19,15 @@ const App = (() => {
         format:      'letter-number' // 'letter-number' | 'number-letter'
     };
 
-    // ── Rapid mode helper — is the last field in the textarea selected? ────────
-    function isAnchorFieldSelected(ta) {
-        const text   = ta.value;
-        const start  = ta.selectionStart;
-        const end    = ta.selectionEnd;
-        if (start >= end) return false;
-        // Selection must look like a bracketed field
-        if (text[start] !== '[' || text[end - 1] !== ']') return false;
-        // Must be the very last [___] in the document
-        const fields    = findAllFields(text);
-        if (fields.length === 0) return false;
-        const lastField = fields[fields.length - 1];
-        return start === lastField.start && end === lastField.end;
+    // ── Undo/redo helper — find the changed region between two text states ─────
+    // Returns {start, end} in `toText` — the range that differs from `fromText`.
+    function computeChangedRange(fromText, toText) {
+        let s = 0;
+        const minLen = Math.min(fromText.length, toText.length);
+        while (s < minLen && fromText[s] === toText[s]) s++;
+        let fe = fromText.length, te = toText.length;
+        while (fe > s && te > s && fromText[fe - 1] === toText[te - 1]) { fe--; te--; }
+        return { start: s, end: te };
     }
 
     // ── Init ──────────────────────────────────────────────────────────────────
@@ -70,12 +66,22 @@ const App = (() => {
             updateFooter();
             updateBlockMap();
 
-            // ── Rapid mode: move cursor LEFT of the separator ─────────────────
-            // When a [___]- placeholder is filled in rapid mode, place the cursor
-            // before the separator so the user can extend the range (e.g. A1-A3).
-            // Auto-advance is already paused (fieldAdv.anchor = -1 above).
+            // ── Rapid mode: cursor left of separator + auto-advance timer ────
+            // Move cursor before the separator so the user can extend the range
+            // (e.g. type "-A3").  Then schedule an advance after fieldAdv.delay;
+            // if the user types during that window onFieldInput resets the timer.
             if (Rapid.isActive() && e.detail.wasPlaceholder) {
                 Rapid.onCassetteBlock(ta, e.detail.prefix);
+                const sepEnd = Rapid.getBlockSepEnd();
+                if (sepEnd !== null) {
+                    clearTimeout(fieldAdv.timer);
+                    fieldAdv.timer = setTimeout(() => {
+                        const ta2 = document.getElementById('dictation');
+                        Rapid.clearBlockSepEnd();
+                        fieldAdv.anchor = -1;
+                        goToNextField(ta2.selectionEnd);
+                    }, fieldAdv.delay);
+                }
             }
         });
 
@@ -581,12 +587,13 @@ const App = (() => {
         if (!text.trim()) return;
 
         // ── Rapid mode: save template and apply first specimen immediately ─────
+        // Only save/apply when no template is set yet — prevents mid-fill paste
+        // events from overwriting the saved blank template with filled content.
         if (Rapid.isActive()) {
-            if (text.length > 5) {
+            if (text.length > 5 && !Rapid.getTemplate()) {
                 Rapid.saveTemplate(text);
                 Rapid.applyFirst(ta);
                 recordSnapshot('rapid-template');
-                // Advance to the first [___] field of the new specimen
                 setTimeout(() => goToNextField(0), 60);
             }
             updateFooter();
@@ -778,11 +785,15 @@ const App = (() => {
     }
 
     // Restore textarea to a specific snapshot (does not add to tape).
-    function restoreHistoryState(snap) {
+    function restoreHistoryState(snap, sel) {
         const ta = document.getElementById('dictation');
         _restoringFromHistory = true;
         ta.value = snap.text;
-        ta.selectionStart = ta.selectionEnd = snap.text.length;
+        if (sel) {
+            ta.setSelectionRange(sel.start, sel.end);
+        } else {
+            ta.selectionStart = ta.selectionEnd = snap.text.length;
+        }
         ta.focus();
         _restoringFromHistory = false;
         // Update UI — do NOT dispatch input event (would re-trigger cassette)
@@ -800,16 +811,22 @@ const App = (() => {
             recordSnapshot('pre-undo');
         }
         if (_historyIdx <= 0) { toast('Nothing to undo', ''); return false; }
+        const fromText = _historyTape[_historyIdx].text;
         _historyIdx--;
-        restoreHistoryState(_historyTape[_historyIdx]);
+        const toSnap = _historyTape[_historyIdx];
+        const sel = computeChangedRange(fromText, toSnap.text);
+        restoreHistoryState(toSnap, sel);
         toast('Undone', '');
         return true;
     }
 
     function redoAction() {
         if (_historyIdx >= _historyTape.length - 1) { toast('Nothing to redo', ''); return false; }
+        const fromText = _historyTape[_historyIdx].text;
         _historyIdx++;
-        restoreHistoryState(_historyTape[_historyIdx]);
+        const toSnap = _historyTape[_historyIdx];
+        const sel = computeChangedRange(fromText, toSnap.text);
+        restoreHistoryState(toSnap, sel);
         toast('Redone', '');
         return true;
     }
@@ -1261,6 +1278,9 @@ const App = (() => {
         updatePasteBtn();
         updateCopyBtn();
         toast('Pasted from clipboard', 'blue');
+        // In rapid mode the Paste button always replaces the saved template so
+        // the user can re-paste a different template mid-session.
+        if (Rapid.isActive()) Rapid.clearTemplate();
         detectFromPaste();
     }
 
@@ -1349,42 +1369,48 @@ const App = (() => {
         return out;
     }
 
-    // Navigate cursor to the next [...] field, wrapping around if needed.
+    // Navigate cursor to the next [...] field.
+    // In rapid mode: when no field exists at or after `fromPos`, the next
+    // specimen block is appended automatically (no wrap, no button click).
+    // In normal mode: wraps to the first field in the document.
     // `fromPos` defaults to current selectionEnd.
     function goToNextField(fromPos) {
-        const ta = document.getElementById('dictation');
-
-        // ── Rapid mode: anchor field triggers next-specimen append ────────────
-        // If the anchor (last [___] in the document) is currently selected,
-        // pressing Next appends the next specimen block instead of wrapping.
-        if (Rapid.isActive() && isAnchorFieldSelected(ta)) {
-            if (!Rapid.getTemplate()) { toast('No rapid template saved', ''); return false; }
-            recordSnapshot('rapid-specimen');
-            Rapid.appendNext(ta);
-            updateFooter();
-            updateBlockMap();
-            refreshFieldCounter();
-            recordSnapshot('rapid-next');
-            toast(`Specimen ${Rapid.specimenLabel(Rapid.getSpecimenIdx())} — continue filling`, 'blue');
-            // Advance to the first field of the newly appended specimen
-            const newFrom   = ta.selectionStart;
-            const text2     = ta.value;
-            const fields2   = findAllFields(text2);
-            const firstNew  = fields2.find(f => f.start >= newFrom);
-            if (firstNew) {
-                ta.setSelectionRange(firstNew.start, firstNew.end);
-                ta.focus();
-                fieldAdv.anchor    = firstNew.start;
-                fieldAdv.watchBack = false;
-                clearTimeout(fieldAdv.timer);
-                updateFieldCounter(fields2.indexOf(firstNew) + 1, fields2.length);
-            }
-            return true;
-        }
-
+        const ta     = document.getElementById('dictation');
         const text   = ta.value;
         const from   = fromPos !== undefined ? fromPos : ta.selectionEnd;
         const fields = findAllFields(text);
+
+        // ── Rapid mode: no more fields ahead → append next specimen ──────────
+        if (Rapid.isActive()) {
+            const nextField = fields.find(f => f.start >= from);
+            if (!nextField) {
+                if (!Rapid.getTemplate()) {
+                    toast('No fields remaining', '');
+                    fieldAdv.anchor = -1;
+                    updateFieldCounter(0, 0);
+                    return false;
+                }
+                recordSnapshot('rapid-specimen');
+                Rapid.appendNext(ta);
+                updateFooter(); updateBlockMap(); refreshFieldCounter();
+                toast(`Specimen ${Rapid.specimenLabel(Rapid.getSpecimenIdx())} — continue filling`, 'blue');
+                // Jump to first field of the new specimen block
+                const newFrom  = ta.selectionStart;
+                const newText  = ta.value;
+                const newFields = findAllFields(newText);
+                const firstNew = newFields.find(f => f.start >= newFrom);
+                if (firstNew) {
+                    ta.setSelectionRange(firstNew.start, firstNew.end);
+                    ta.focus();
+                    fieldAdv.anchor    = firstNew.start;
+                    fieldAdv.watchBack = false;
+                    clearTimeout(fieldAdv.timer);
+                    updateFieldCounter(newFields.indexOf(firstNew) + 1, newFields.length);
+                }
+                return true;
+            }
+            // nextField found — fall through to select it normally below
+        }
 
         if (fields.length === 0) {
             toast('No fields remaining', '');
@@ -1393,7 +1419,7 @@ const App = (() => {
             return false;
         }
 
-        // Next field at or after `from`, wrap around if needed
+        // Normal mode: next field at or after `from`, wrap to start if needed
         let target = fields.find(f => f.start >= from);
         if (!target) target = fields[0];
 
@@ -1487,24 +1513,28 @@ const App = (() => {
 
     // Called on every textarea `input` event — drives auto-advance
     function onFieldInput() {
-        if (fieldAdv.anchor < 0) return;
-
         const ta     = document.getElementById('dictation');
         const text   = ta.value;
         const cursor = ta.selectionEnd;
 
-        // ── Rapid mode: pause at the anchor (last field) ──────────────────────
-        // When the cursor is inside or at the anchor [___] at the bottom,
-        // do not schedule auto-advance — the user must press ▶ Next explicitly.
-        if (Rapid.isActive()) {
-            const fields    = findAllFields(text);
-            const lastField = fields.length > 0 ? fields[fields.length - 1] : null;
-            if (lastField && cursor >= lastField.start && cursor <= lastField.end) {
-                clearTimeout(fieldAdv.timer);
-                updateFieldAdvStatus();
-                return;
-            }
+        // ── Rapid mode: debounce timer while user is in the cassette block area
+        // After cassette fills a [___]- line, _blockSepEnd marks the separator
+        // end.  We keep resetting the advance timer on each keystroke so the
+        // user can extend the range (e.g. type "-A3"); once they stop typing the
+        // timer fires and goToNextField advances past the block.
+        if (Rapid.isActive() && Rapid.getBlockSepEnd() !== null) {
+            clearTimeout(fieldAdv.timer);
+            fieldAdv.timer = setTimeout(() => {
+                const ta2 = document.getElementById('dictation');
+                Rapid.clearBlockSepEnd();
+                fieldAdv.anchor = -1;
+                goToNextField(ta2.selectionEnd);
+            }, fieldAdv.delay);
+            updateFieldAdvStatus();
+            return;
         }
+
+        if (fieldAdv.anchor < 0) return;
 
         // If cursor is still inside a [...], the field isn't filled yet
         if (isCursorInField(text, cursor)) {
@@ -1641,14 +1671,10 @@ const App = (() => {
         const el = document.getElementById('field-adv-status');
         if (!el) return;
 
-        // ── Rapid mode: show anchor hint ──────────────────────────────────────
-        if (Rapid.isActive()) {
-            const ta2 = document.getElementById('dictation');
-            if (isAnchorFieldSelected(ta2)) {
-                const nextLabel = Rapid.specimenLabel(Rapid.getSpecimenIdx() + 1);
-                el.textContent = `\u25b6 Next \u2192 Specimen ${nextLabel}`;
-                return;
-            }
+        // ── Rapid mode: show block-extension hint ─────────────────────────────
+        if (Rapid.isActive() && Rapid.getBlockSepEnd() !== null) {
+            el.textContent = 'extending range\u2026';
+            return;
         }
 
         if (!fieldAdv.auto) { el.textContent = ''; return; }
