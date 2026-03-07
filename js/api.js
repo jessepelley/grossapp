@@ -8,11 +8,57 @@ const API = (() => {
 
     const BASE = 'https://api.jjjp.ca/grossapp';
 
+    // Cloudflare Access login URL — redirects here when session is missing,
+    // then returns the user to the app after authentication.
+    const CF_LOGIN = 'https://jjjp.cloudflareaccess.com/cdn-cgi/access/login'
+        + '?redirect_url=' + encodeURIComponent(window.location.href);
+
+    // Resolves when the CF auth popup signals success
+    let _authResolve = null;
+    window.addEventListener('message', (e) => {
+        if (e.data === 'cf_auth_ok' && _authResolve) {
+            _authResolve();
+            _authResolve = null;
+        }
+    });
+
+    function handleUnauthorized() {
+        return new Promise((resolve) => {
+            _authResolve = resolve;
+            const popup = window.open(
+                'https://api.jjjp.ca/grossapp/cf_ping.php',
+                'cf_login',
+                'width=520,height=480,menubar=no,toolbar=no,location=no'
+            );
+            // Fallback if popup is blocked or closed manually
+            const check = setInterval(() => {
+                if (!popup || popup.closed) {
+                    clearInterval(check);
+                    if (_authResolve) { _authResolve(); _authResolve = null; }
+                }
+            }, 500);
+        });
+    }
+
     async function request(endpoint, options = {}) {
         const res = await fetch(`${BASE}/${endpoint}`, {
             headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
             ...options
         });
+        if (res.status === 401) {
+            await handleUnauthorized();
+            // Retry once after authentication
+            const retry = await fetch(`${BASE}/${endpoint}`, {
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'include',
+                ...options
+            });
+            if (retry.status === 401) throw new Error('Authentication failed — please refresh the page');
+            const retryJson = await retry.json();
+            if (!retryJson.ok) throw new Error(retryJson.error || 'API error');
+            return retryJson.data;
+        }
         const json = await res.json();
         if (!json.ok) throw new Error(json.error || 'API error');
         return json.data;
@@ -44,6 +90,7 @@ const API = (() => {
             const params = new URLSearchParams({ q: q ?? '' });
             if (specimen_id) params.set('specimen_id', specimen_id);
             const res  = await fetch(`${BASE}/templates_search.php?${params}`, {
+                credentials: 'include',
                 headers: { 'Content-Type': 'application/json' }
             });
             const json = await res.json();
