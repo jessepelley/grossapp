@@ -1,0 +1,1494 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="canonical" href="https://app.jjjp.ca/">
+<meta name="theme-color" content="#f4f6f9">
+<link rel="icon" type="image/png" href="/favicon-96x96.png" sizes="96x96" />
+<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+<link rel="shortcut icon" href="/favicon.ico" />
+<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+<meta name="apple-mobile-web-app-title" content="A1" />
+<link rel="manifest" href="/site.webmanifest" />
+
+<title>A1</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Source+Code+Pro:wght@400;500;600&family=Source+Sans+3:ital,wght@0,300;0,400;0,600;1,300&display=swap" rel="stylesheet">
+<style>
+
+/* ── Themes ──────────────────────────────────────────────────────────────── */
+
+:root,
+[data-theme="light"] {
+    --bg:          #f4f6f9;
+    --surface:     #ffffff;
+    --surface2:    #eef1f6;
+    --border:      #c8d0dc;
+    --border2:     #b0bac8;
+    --accent:      #1a4f8a;
+    --accent-dim:  rgba(26,79,138,.10);
+    --accent-text: #1a4f8a;
+    --green:       #1a7a3c;
+    --green-dim:   rgba(26,122,60,.15);
+    --yellow:      #8a6000;
+    --yellow-dim:  rgba(138,96,0,.10);
+    --red:         #b81c1c;
+    --red-dim:     rgba(184,28,28,.08);
+    --text:        #111827;
+    --text2:       #374151;
+    --muted:       #374151;
+    --muted2:      #6b7280;
+    --shadow:      0 1px 3px rgba(0,0,0,.10), 0 1px 2px rgba(0,0,0,.06);
+    --shadow-md:   0 4px 6px rgba(0,0,0,.07), 0 2px 4px rgba(0,0,0,.05);
+}
+
+[data-theme="dark"] {
+    --bg:          #0d1117;
+    --surface:     #161b24;
+    --surface2:    #1c2333;
+    --border:      #252d3d;
+    --border2:     #2e3850;
+    --accent:      #58a6ff;
+    --accent-dim:  rgba(88,166,255,.12);
+    --accent-text: #58a6ff;
+    --green:       #7ee787;
+    --green-dim:   rgba(126,231,135,.12);
+    --yellow:      #e3b341;
+    --yellow-dim:  rgba(227,179,65,.10);
+    --red:         #f85149;
+    --red-dim:     rgba(248,81,73,.08);
+    --text:        #cdd9e5;
+    --text2:       #adbac7;
+    --muted:       #8b97a4;
+    --muted2:      #606c7a;
+    --shadow:      0 1px 3px rgba(0,0,0,.3);
+    --shadow-md:   0 4px 6px rgba(0,0,0,.4);
+}
+
+/* ── Reset ───────────────────────────────────────────────────────────────── */
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+    height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Source Sans 3', sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+}
+
+/* ── App shell ───────────────────────────────────────────────────────────── */
+
+.app {
+    display: grid;
+    grid-template-rows: auto auto 1fr;
+    height: 100vh;
+    overflow: hidden;
+}
+
+/* ── Header ──────────────────────────────────────────────────────────────── */
+
+.header {
+    display: flex;
+    align-items: center;
+    height: 48px;
+    background: var(--accent);
+    color: #fff;
+    padding: 0 16px;
+    gap: 12px;
+    flex-shrink: 0;
+    box-shadow: var(--shadow-md);
+}
+
+.logo {
+    font-family: 'Source Code Pro', monospace;
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: .18em;
+    text-transform: uppercase;
+    color: #fff;
+    opacity: .95;
+    padding-right: 16px;
+    border-right: 1px solid rgba(255,255,255,.25);
+    white-space: nowrap;
+}
+
+.header-context {
+    flex: 1;
+    font-size: 12px;
+    font-family: 'Source Code Pro', monospace;
+    color: rgba(255,255,255,.8);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.header-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+/* ── Header buttons ──────────────────────────────────────────────────────── */
+
+.hbtn {
+    font-family: 'Source Code Pro', monospace;
+    font-size: 11px;
+    letter-spacing: .04em;
+    padding: 5px 12px;
+    border-radius: 3px;
+    border: 1px solid rgba(255,255,255,.35);
+    cursor: pointer;
+    background: rgba(255,255,255,.12);
+    color: rgba(255,255,255,.9);
+    transition: all .12s;
+    height: 30px;
+    white-space: nowrap;
+}
+.hbtn:hover {
+    background: rgba(255,255,255,.22);
+    border-color: rgba(255,255,255,.6);
+    color: #fff;
+}
+.hbtn.danger:hover {
+    background: rgba(220,38,38,.7);
+    border-color: rgba(255,255,255,.5);
+}
+.hbtn.submit {
+    background: rgba(255,255,255,.12);
+    border-color: rgba(255,255,255,.35);
+    color: rgba(255,255,255,.6);
+    cursor: default;
+}
+.hbtn.submit[data-complete="1"] {
+    background: rgba(22,163,74,.7);
+    border-color: rgba(255,255,255,.5);
+    color: #fff;
+    cursor: pointer;
+}
+.hbtn.submit[data-complete="1"]:hover {
+    background: rgba(22,163,74,.9);
+}
+
+/* Theme + format toggles in header */
+.hbtn.toggle {
+    font-size: 10px;
+    padding: 4px 10px;
+    opacity: .75;
+}
+.hbtn.toggle:hover { opacity: 1; }
+
+/* ── Context bar ──────────────────────────────────────────────────────────── */
+
+.context-bar {
+    display: grid;
+    grid-template-columns: 1fr 1fr auto;
+    background: var(--surface);
+    border-bottom: 2px solid var(--border);
+    box-shadow: var(--shadow);
+    flex-shrink: 0;
+}
+
+.context-cell {
+    padding: 8px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    border-right: 1px solid var(--border);
+}
+.context-cell:last-child { border-right: none; }
+
+.context-label {
+    font-family: 'Source Code Pro', monospace;
+    font-size: 9px;
+    letter-spacing: .14em;
+    color: var(--muted);
+    text-transform: uppercase;
+    font-weight: 600;
+}
+
+.context-input {
+    background: transparent;
+    border: none;
+    outline: none;
+    color: var(--text);
+    font-family: 'Source Sans 3', sans-serif;
+    font-size: 14px;
+    font-weight: 600;
+    width: 100%;
+    caret-color: var(--accent);
+}
+.context-input::placeholder { color: var(--muted2); font-weight: 400; }
+
+/* History tags */
+.history-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    min-height: 22px;
+    align-items: center;
+}
+
+.tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-family: 'Source Code Pro', monospace;
+    font-size: 10px;
+    font-weight: 500;
+    padding: 2px 8px;
+    border-radius: 3px;
+    border: 1px solid var(--border2);
+    color: var(--text2);
+    background: var(--surface2);
+    cursor: default;
+}
+.tag.primary {
+    border-color: var(--accent);
+    background: var(--accent-dim);
+    color: var(--accent-text);
+}
+.tag-remove {
+    cursor: pointer;
+    color: var(--muted2);
+    font-size: 12px;
+    line-height: 1;
+}
+.tag-remove:hover { color: var(--red); }
+
+/* Status cell */
+.status-cell {
+    padding: 8px 16px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 5px;
+    min-width: 130px;
+}
+.pill-row {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-family: 'Source Code Pro', monospace;
+    font-size: 10px;
+    color: var(--muted);
+    font-weight: 500;
+}
+.dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--muted2);
+    flex-shrink: 0;
+}
+.dot.on   { background: var(--green); box-shadow: 0 0 0 2px var(--green-dim); }
+.dot.warn { background: var(--yellow); }
+
+/* ── Main body ────────────────────────────────────────────────────────────── */
+
+.body {
+    display: grid;
+    grid-template-columns: 1fr 290px;
+    overflow: hidden;
+    min-height: 0;
+}
+
+/* ── Dictation panel ──────────────────────────────────────────────────────── */
+
+.dictation-wrap {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    border-right: 1px solid var(--border);
+    background: var(--surface);
+}
+
+.dictation-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 12px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface2);
+    flex-shrink: 0;
+}
+
+#dictation {
+    flex: 1;
+    background: var(--surface);
+    border: none;
+    outline: none;
+    color: var(--text);
+    font-family: 'Source Code Pro', monospace;
+    font-size: 13px;
+    line-height: 1.9;
+    padding: 18px 22px;
+    resize: none;
+    tab-size: 4;
+    caret-color: var(--accent);
+    min-height: 0;
+}
+#dictation::placeholder {
+    color: var(--muted2);
+    font-family: 'Source Sans 3', sans-serif;
+    font-style: italic;
+    font-size: 13px;
+}
+
+.dictation-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 5px 14px;
+    border-top: 1px solid var(--border);
+    background: var(--surface2);
+    flex-shrink: 0;
+}
+.footer-stat {
+    font-family: 'Source Code Pro', monospace;
+    font-size: 10px;
+    color: var(--muted);
+    font-weight: 500;
+}
+#next-block-preview {
+    font-family: 'Source Code Pro', monospace;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--accent-text);
+}
+
+/* ── Sidebar ──────────────────────────────────────────────────────────────── */
+
+.sidebar {
+    background: var(--surface);
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    border-left: 1px solid var(--border);
+}
+
+.sidebar-section { border-bottom: 1px solid var(--border); }
+
+.sidebar-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 9px 14px 8px;
+    cursor: pointer;
+    user-select: none;
+    background: var(--surface2);
+    border-bottom: 1px solid var(--border);
+}
+.sidebar-head:hover { background: var(--surface); }
+
+.sidebar-title {
+    font-family: 'Source Code Pro', monospace;
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: .14em;
+    color: var(--muted);
+    text-transform: uppercase;
+}
+.sidebar-toggle { font-size: 9px; color: var(--muted2); }
+
+.sidebar-body { padding: 10px 12px 14px; }
+
+/* ── Word cloud ───────────────────────────────────────────────────────────── */
+
+#word-cloud {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    min-height: 40px;
+}
+
+.cloud-term {
+    font-family: 'Source Code Pro', monospace;
+    font-size: 11px;
+    font-weight: 500;
+    padding: 3px 8px;
+    border-radius: 3px;
+    border: 1px solid var(--border2);
+    color: var(--text2);
+    background: var(--surface2);
+    cursor: pointer;
+    transition: all .1s;
+    user-select: none;
+    line-height: 1.5;
+}
+.cloud-term:hover {
+    border-color: var(--accent);
+    color: var(--accent-text);
+    background: var(--accent-dim);
+}
+.cloud-term.used {
+    border-color: var(--green);
+    color: var(--green);
+    background: var(--green-dim);
+    font-weight: 600;
+}
+.cloud-term.inserted {
+    border-color: var(--accent);
+    color: var(--accent-text);
+    background: var(--accent-dim);
+}
+.cloud-empty {
+    font-size: 12px;
+    color: var(--muted2);
+    font-style: italic;
+    padding: 4px 2px;
+}
+
+/* ── Block map ────────────────────────────────────────────────────────────── */
+
+#block-map {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    max-height: 220px;
+    overflow-y: auto;
+}
+.block-row {
+    display: flex;
+    gap: 8px;
+    font-family: 'Source Code Pro', monospace;
+    font-size: 11px;
+    align-items: baseline;
+    padding: 1px 0;
+}
+.block-lbl {
+    font-weight: 600;
+    min-width: 36px;
+    flex-shrink: 0;
+}
+.block-txt {
+    color: var(--muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* ── Toolbar / sidebar buttons ────────────────────────────────────────────── */
+
+.btn {
+    font-family: 'Source Code Pro', monospace;
+    font-size: 11px;
+    letter-spacing: .03em;
+    padding: 6px 12px;
+    border-radius: 3px;
+    border: 1px solid var(--border2);
+    cursor: pointer;
+    background: var(--surface);
+    color: var(--text2);
+    text-align: left;
+    transition: all .1s;
+    white-space: nowrap;
+    font-weight: 500;
+}
+.btn:hover {
+    border-color: var(--accent);
+    color: var(--accent-text);
+    background: var(--accent-dim);
+}
+.btn.danger:hover {
+    border-color: var(--red);
+    color: var(--red);
+    background: var(--red-dim);
+}
+.btn sub {
+    display: block;
+    font-size: 9px;
+    color: var(--muted);
+    margin-top: 1px;
+}
+.btn-group {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+.btn.full {
+    width: 100%;
+    text-align: center;
+    padding: 8px;
+    font-size: 12px;
+}
+.btn.green-btn {
+    border-color: var(--green);
+    color: var(--green);
+    background: var(--green-dim);
+}
+.btn.green-btn:hover {
+    background: var(--green-dim);
+    filter: brightness(.9);
+}
+
+/* ── Autocomplete dropdown ────────────────────────────────────────────────── */
+
+.autocomplete-wrap { position: relative; }
+
+.dropdown {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0; right: 0;
+    background: var(--surface);
+    border: 1px solid var(--border2);
+    border-radius: 4px;
+    z-index: 200;
+    max-height: 200px;
+    overflow-y: auto;
+    display: none;
+    box-shadow: var(--shadow-md);
+}
+.dropdown.open { display: block; }
+.dd-item {
+    padding: 8px 12px;
+    cursor: pointer;
+    font-size: 13px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid var(--border);
+    color: var(--text);
+}
+.dd-item:last-child { border-bottom: none; }
+.dd-item:hover, .dd-item.highlighted { background: var(--accent-dim); color: var(--accent-text); }
+.dd-item .dd-count {
+    font-family: 'Source Code Pro', monospace;
+    font-size: 10px;
+    color: var(--muted2);
+}
+.dd-item.new-entry { color: var(--accent-text); font-style: italic; font-weight: 600; }
+
+/* ── Toast ────────────────────────────────────────────────────────────────── */
+
+#toast {
+    position: fixed;
+    bottom: 24px;
+    left: 50%;
+    transform: translateX(-50%) translateY(8px);
+    background: var(--text);
+    color: var(--surface);
+    font-family: 'Source Code Pro', monospace;
+    font-size: 11px;
+    font-weight: 500;
+    padding: 8px 18px;
+    border-radius: 4px;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .15s, transform .15s;
+    white-space: nowrap;
+    z-index: 300;
+    box-shadow: var(--shadow-md);
+}
+#toast.show  { opacity: 1; transform: translateX(-50%) translateY(0); }
+#toast.green { background: var(--green); }
+#toast.blue  { background: var(--accent); color: #fff; }
+
+/* ── Scrollbar ────────────────────────────────────────────────────────────── */
+
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 4px; }
+
+/* ── Field advancement ───────────────────────────────────────────────────── */
+
+.field-adv-group {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+.btn.next-field {
+    /* same look as .btn in default state */
+}
+.btn.next-field.auto-mode {
+    background: var(--accent);
+    color: #fff;
+    border-color: var(--accent);
+}
+.btn.next-field.auto-mode::after {
+    content: '';
+    display: inline-block;
+    width: 5px; height: 5px;
+    border-radius: 50%;
+    background: #4dff91;
+    margin-left: 5px;
+    vertical-align: middle;
+    animation: field-pulse 1.4s ease-in-out infinite;
+}
+@keyframes field-pulse {
+    0%, 100% { opacity: 1; }
+    50%       { opacity: .4; }
+}
+.field-counter {
+    font-family: 'Source Code Pro', monospace;
+    font-size: 10px;
+    color: var(--muted2);
+    min-width: 36px;
+    text-align: center;
+    font-weight: 500;
+    user-select: none;
+}
+.field-counter.has-fields { color: var(--accent-text); }
+
+/* Field prefs popover */
+.field-prefs-panel {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    z-index: 250;
+    background: var(--surface);
+    border: 1px solid var(--border2);
+    border-radius: 5px;
+    box-shadow: var(--shadow-md);
+    padding: 13px 15px 11px;
+    min-width: 272px;
+    display: none;
+}
+.field-prefs-panel.open { display: block; }
+.field-prefs-title {
+    font-family: 'Source Code Pro', monospace;
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: .13em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 11px;
+}
+.field-prefs-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    margin-bottom: 9px;
+}
+.field-prefs-label {
+    font-family: 'Source Code Pro', monospace;
+    font-size: 10px;
+    color: var(--text2);
+    min-width: 76px;
+    padding-top: 3px;
+    flex-shrink: 0;
+}
+.field-prefs-input {
+    font-family: 'Source Code Pro', monospace;
+    font-size: 11px;
+    padding: 3px 7px;
+    border: 1px solid var(--border2);
+    border-radius: 3px;
+    background: var(--surface2);
+    color: var(--text);
+    width: 80px;
+}
+.field-prefs-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 3px;
+    flex: 1;
+}
+.pref-chip {
+    font-family: 'Source Code Pro', monospace;
+    font-size: 10px;
+    padding: 2px 6px;
+    border-radius: 3px;
+    border: 1px solid var(--border2);
+    background: var(--surface2);
+    color: var(--text2);
+    cursor: pointer;
+    user-select: none;
+}
+.pref-chip:hover { border-color: var(--red); color: var(--red); }
+.pref-chip-add {
+    font-family: 'Source Code Pro', monospace;
+    font-size: 12px;
+    line-height: 1;
+    padding: 1px 7px;
+    border-radius: 3px;
+    border: 1px dashed var(--border2);
+    background: transparent;
+    color: var(--muted2);
+    cursor: pointer;
+    flex-shrink: 0;
+}
+.pref-chip-add:hover { border-color: var(--accent); color: var(--accent-text); }
+.pref-clear-btn {
+    font-family: 'Source Code Pro', monospace;
+    font-size: 9px;
+    padding: 2px 7px;
+    border-radius: 3px;
+    border: 1px solid var(--border2);
+    background: transparent;
+    color: var(--muted2);
+    cursor: pointer;
+    flex-shrink: 0;
+    margin-top: 2px;
+}
+.pref-clear-btn:hover { border-color: var(--red); color: var(--red); }
+
+/* Footer auto-next status */
+.footer-adv-status {
+    color: var(--accent-text);
+    font-style: italic;
+}
+
+/* ── History tape modal ──────────────────────────────────────────────────── */
+.history-modal-overlay {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,.45);
+    z-index: 300;
+    display: flex; align-items: center; justify-content: center;
+}
+.history-modal {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: var(--shadow-md);
+    width: 560px; max-width: 96vw;
+    max-height: 80vh;
+    display: flex; flex-direction: column;
+    overflow: hidden;
+}
+.history-modal-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+}
+.history-modal-title {
+    font-weight: 600; font-size: 13px; color: var(--text);
+}
+.history-modal-hint {
+    font-size: 11px; color: var(--muted2);
+    padding: 6px 16px 0;
+    flex-shrink: 0;
+}
+.history-tape-list {
+    overflow-y: auto;
+    flex: 1;
+    padding: 4px 0 8px;
+}
+/* Each history row */
+.hst-entry {
+    display: grid;
+    grid-template-columns: 78px 130px 90px auto;
+    align-items: center;
+    padding: 5px 16px;
+    cursor: pointer;
+    border-left: 3px solid transparent;
+    font-family: 'Source Code Pro', monospace;
+    font-size: 11px;
+    color: var(--text2);
+    transition: background .1s;
+}
+.hst-entry:hover          { background: var(--accent-dim); }
+.hst-entry.hst-active     { background: var(--accent-dim); border-left-color: var(--accent); color: var(--text); }
+.hst-entry.hst-unsaved    { opacity: .65; font-style: italic; cursor: default; }
+.hst-time   { color: var(--muted2); font-size: 11px; }
+.hst-label  { color: var(--text2); }
+.hst-diff   { display: flex; gap: 6px; }
+.hst-plus   { color: var(--green); font-weight: 600; }
+.hst-minus  { color: var(--red);   font-weight: 600; }
+.hst-nodiff { color: var(--muted2); }
+.hst-len    { color: var(--muted2); text-align: right; justify-self: end; }
+.hst-empty  {
+    padding: 24px 16px; text-align: center;
+    color: var(--muted2); font-style: italic; font-size: 12px;
+}
+
+/* Paste button */
+.btn.paste-btn.has-template {
+    border-color: var(--green);
+    color: var(--green);
+    background: var(--green-dim);
+    font-weight: 600;
+    animation: paste-glow 1.6s ease-in-out infinite;
+}
+@keyframes paste-glow {
+    0%, 100% { box-shadow: 0 0 0 0 var(--green-dim); }
+    50%       { box-shadow: 0 0 0 3px var(--green-dim); }
+}
+
+/* ── Status dots — source indicator ────────────────────────────────────── */
+
+/* dot.on   = green  (database terms present)                               */
+/* dot.warn = yellow (LLM loading or LLM-only result)                       */
+/* dot.llm  = blue   (confirmed LLM result)                                 */
+/* dot.mixed= green + blue ring (mixed source)                              */
+.dot.llm   { background: var(--accent); box-shadow: 0 0 0 2px var(--accent-dim); }
+.dot.mixed { background: var(--green);  box-shadow: 0 0 0 2px var(--accent-dim); }
+
+.pill-row { cursor: default; }
+.pill-row[title] { cursor: help; }
+
+/* ── Similar cases sidebar section ─────────────────────────────────────── */
+
+#similar-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.sim-card {
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 8px 10px;
+    background: var(--surface2);
+    cursor: default;
+}
+.sim-card:hover {
+    border-color: var(--accent);
+    background: var(--accent-dim);
+}
+.sim-card-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    margin-bottom: 4px;
+}
+.sim-specimen {
+    font-family: 'Source Code Pro', monospace;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text2);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+}
+.sim-score {
+    font-family: 'Source Code Pro', monospace;
+    font-size: 10px;
+    font-weight: 700;
+    padding: 1px 5px;
+    border-radius: 3px;
+    flex-shrink: 0;
+}
+.sim-score.high   { background: var(--green-dim);   color: var(--green);  border: 1px solid rgba(26,122,60,.2); }
+.sim-score.medium { background: var(--yellow-dim);  color: var(--yellow); border: 1px solid rgba(138,96,0,.2); }
+.sim-score.low    { background: var(--surface);     color: var(--muted2); border: 1px solid var(--border); }
+.sim-histories {
+    font-size: 11px;
+    color: var(--muted2);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    margin-bottom: 3px;
+}
+.sim-excerpt {
+    font-family: 'Source Code Pro', monospace;
+    font-size: 10px;
+    color: var(--muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    line-height: 1.5;
+}
+.sim-terms {
+    font-family: 'Source Code Pro', monospace;
+    font-size: 10px;
+    color: var(--accent-text);
+    margin-top: 2px;
+    opacity: .8;
+}
+.sim-meta {
+    font-size: 10px;
+    color: var(--muted2);
+    margin-top: 3px;
+}
+
+/* ── Word cloud source indicators ────────────────────────────────────────── */
+.cloud-term.source-llm {
+    border-style: dashed;
+    opacity: .85;
+}
+.cloud-term.source-sim {
+    border-color: var(--yellow);
+    color: var(--yellow);
+    background: var(--yellow-dim);
+}
+.cloud-term.source-db-sim {
+    border-color: var(--green);
+    background: var(--green-dim);
+}
+
+/* ── Cloud term tooltip ───────────────────────────────────────────────────── */
+#cloud-tooltip {
+    position: fixed;
+    z-index: 400;
+    background: var(--text);
+    color: var(--surface);
+    font-family: 'Source Code Pro', monospace;
+    font-size: 10px;
+    line-height: 1.6;
+    padding: 7px 11px;
+    border-radius: 4px;
+    max-width: 240px;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity .1s;
+    box-shadow: var(--shadow-md);
+    white-space: pre-wrap;
+}
+#cloud-tooltip.visible { opacity: 1; }
+
+/* ── Template suggestion modal ───────────────────────────────────────────── */
+.tmpl-modal-overlay {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,.5);
+    z-index: 300;
+    display: flex; align-items: center; justify-content: center;
+}
+.tmpl-modal {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: var(--shadow-md);
+    width: min(1100px, 96vw);
+    height: min(82vh, 820px);
+    display: flex; flex-direction: column;
+    overflow: hidden;
+}
+.tmpl-modal-header {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+}
+.tmpl-modal-title { font-weight: 600; font-size: 13px; color: var(--text); white-space: nowrap; }
+.tmpl-search-wrap {
+    flex: 1; position: relative;
+}
+.tmpl-search-input {
+    width: 100%; box-sizing: border-box;
+    padding: 5px 10px 5px 28px;
+    border: 1px solid var(--border); border-radius: 4px;
+    background: var(--surface2); color: var(--text);
+    font-size: 13px; outline: none;
+}
+.tmpl-search-input:focus { border-color: var(--accent); }
+.tmpl-search-icon {
+    position: absolute; left: 8px; top: 50%; transform: translateY(-50%);
+    color: var(--muted2); font-size: 12px; pointer-events: none;
+}
+/* Two-pane body */
+.tmpl-modal-body {
+    display: flex; flex: 1; overflow: hidden;
+}
+/* Left: card list */
+.tmpl-card-list {
+    width: 280px; flex-shrink: 0;
+    overflow-y: auto;
+    border-right: 1px solid var(--border);
+    padding: 6px 0;
+}
+.tmpl-card {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+    user-select: none;
+}
+.tmpl-card:last-child { border-bottom: none; }
+.tmpl-card:hover { background: var(--accent-dim); }
+.tmpl-card-selected { background: var(--accent-dim); border-left: 3px solid var(--accent); padding-left: 9px; }
+.tmpl-card-spec {
+    font-weight: 600; font-size: 12px; color: var(--text);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.tmpl-card-meta {
+    font-size: 10px; color: var(--muted2);
+    font-family: 'Source Code Pro', monospace;
+    margin-top: 2px;
+}
+.tmpl-card-hints {
+    display: flex; flex-wrap: wrap; gap: 3px; margin-top: 5px;
+}
+.tmpl-hint {
+    font-size: 10px; padding: 1px 5px;
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 3px; color: var(--muted); white-space: nowrap;
+    overflow: hidden; max-width: 120px; text-overflow: ellipsis;
+}
+/* Right: full preview */
+.tmpl-preview-pane {
+    flex: 1; display: flex; flex-direction: column; overflow: hidden;
+}
+.tmpl-preview-text {
+    flex: 1; overflow-y: auto;
+    padding: 14px 16px;
+    font-family: 'Source Code Pro', monospace;
+    font-size: 12px; line-height: 1.7;
+    color: var(--text);
+    white-space: pre-wrap; word-break: break-word;
+    background: var(--surface2);
+}
+.tmpl-preview-empty {
+    flex: 1; display: flex; align-items: center; justify-content: center;
+    color: var(--muted2); font-size: 13px; font-style: italic;
+    background: var(--surface2);
+}
+mark.tmpl-ph {
+    background: rgba(99,179,237,.18);
+    color: var(--accent);
+    border-radius: 2px;
+    padding: 0 1px;
+    font-style: normal;
+}
+.tmpl-preview-footer {
+    display: flex; align-items: center; justify-content: flex-end;
+    gap: 8px;
+    padding: 8px 12px;
+    border-top: 1px solid var(--border);
+    flex-shrink: 0;
+    background: var(--surface);
+}
+.tmpl-hint-row {
+    flex: 1; font-size: 11px; color: var(--muted2); font-style: italic;
+}
+.tmpl-empty {
+    padding: 28px 16px; text-align: center;
+    color: var(--muted2); font-size: 13px;
+}
+.sim-empty {
+    font-size: 12px;
+    color: var(--muted2);
+    font-style: italic;
+    padding: 4px 2px;
+}
+
+/* ── Rapid mode layout — hide API-specific elements ─────────────────────── */
+
+/* Collapse the context-bar grid row so the textarea fills that space */
+html.rapid-mode .app          { grid-template-rows: auto 1fr; }
+html.rapid-mode .context-bar  { display: none !important; }
+
+/* Hide word cloud sidebar section, + Specimen, Re-parse, Submit header btn */
+html.rapid-mode #sidebar-similar-wrap { display: none !important; }
+html.rapid-mode #sidebar-cloud-wrap  { display: none !important; }
+html.rapid-mode #btn-new-specimen    { display: none !important; }
+html.rapid-mode #btn-reparse         { display: none !important; }
+html.rapid-mode #btn-submit-header   { display: none !important; }
+
+/* ── Rapid mode ──────────────────────────────────────────────────────────── */
+
+/* Header toggle button — off state inherits .hbtn.toggle */
+.hbtn.rapid-btn { font-size: 10px; padding: 4px 10px; opacity: .75; }
+.hbtn.rapid-btn:hover { opacity: 1; }
+
+/* Active state: bright amber accent to stand out from normal toggles */
+.hbtn.rapid-btn.rapid-active {
+    background: rgba(217,119,6,.75);
+    border-color: rgba(255,255,255,.6);
+    color: #fff;
+    opacity: 1;
+    animation: rapid-pulse 2s ease-in-out infinite;
+}
+@keyframes rapid-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(217,119,6,.4); }
+    50%       { box-shadow: 0 0 0 4px rgba(217,119,6,.2); }
+}
+
+/* Rapid sidebar section */
+#rapid-sidebar-section .sidebar-body {
+    padding: 10px 14px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+}
+#rapid-status {
+    font-family: 'Source Code Pro', monospace;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--yellow);
+    min-height: 16px;
+}
+.rapid-tmpl-preview {
+    font-family: 'Source Code Pro', monospace;
+    font-size: 10px;
+    color: var(--muted2);
+    white-space: pre-wrap;
+    max-height: 80px;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 5px 7px;
+    background: var(--surface2);
+    line-height: 1.55;
+}
+.rapid-hint {
+    font-size: 11px;
+    color: var(--muted2);
+    line-height: 1.5;
+}
+.rapid-hint code {
+    font-family: 'Source Code Pro', monospace;
+    font-size: 10px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 2px;
+    padding: 1px 4px;
+}
+
+</style>
+</head>
+<body>
+
+<div class="app">
+
+  <!-- ── Header ── -->
+  <header class="header">
+    <div class="logo">A1 GROSSING.APP</div>
+    <div class="header-context" id="header-context">No specimen selected</div>
+    <div class="header-actions">
+
+      <!-- Block format toggle -->
+      <button class="hbtn toggle" id="btn-format"
+        onclick="App.toggleFormat()"
+        title="Switch cassette block format between A1 (letter-number) and 1A (number-letter)">
+        Format: A1
+      </button>
+
+      <!-- Theme toggle -->
+      <button class="hbtn toggle" id="btn-theme"
+        onclick="App.toggleTheme()"
+        title="Switch between light and dark mode">
+        ☀ Light
+      </button>
+
+      <!-- Rapid mode toggle -->
+      <button class="hbtn rapid-btn" id="btn-rapid"
+        onclick="App.toggleRapidMode()"
+        title="Rapid mode — streamlined batch biopsy processing, no API calls">
+        ⚡ Rapid
+      </button>
+
+      <button class="hbtn"
+        onclick="App.copyToClipboard()"
+        title="Copy gross text to clipboard — then paste back into APIS">
+        Copy
+      </button>
+      <button class="hbtn danger"
+        onclick="App.clearAll()"
+        title="Clear everything and start a new case">
+        New Case
+      </button>
+      <button class="hbtn submit" id="btn-submit-header"
+        onclick="App.submitCase()"
+        data-complete="0"
+        title="Fill in all bracketed fields before submitting">
+        Submit Case
+      </button>
+    </div>
+  </header>
+
+  <!-- ── Context bar ── -->
+  <div class="context-bar">
+
+    <!-- Specimen -->
+    <div class="context-cell autocomplete-wrap">
+      <span class="context-label">Specimen</span>
+      <input class="context-input" id="specimen-input" type="text"
+        placeholder="e.g. Gallbladder" autocomplete="off">
+      <div class="dropdown" id="specimen-dropdown"></div>
+    </div>
+
+    <!-- Clinical history -->
+    <div class="context-cell">
+      <span class="context-label">Clinical History</span>
+      <div class="autocomplete-wrap">
+        <input class="context-input" id="history-input" type="text"
+          placeholder="Add tag and press Enter" autocomplete="off">
+        <div class="dropdown" id="history-dropdown"></div>
+      </div>
+      <div class="history-tags" id="history-tags"></div>
+    </div>
+
+    <!-- Status -->
+    <div class="status-cell">
+      <div class="pill-row" id="pill-db" title="Database: no suggestions loaded yet">
+        <div class="dot" id="dot-db"></div>
+        <span id="label-db">Database</span>
+      </div>
+      <div class="pill-row" id="pill-llm" title="LLM: idle">
+        <div class="dot" id="dot-llm"></div>
+        <span id="label-llm">LLM</span>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ── Body ── -->
+  <div class="body">
+
+    <!-- Dictation -->
+    <div class="dictation-wrap">
+      <div class="dictation-toolbar">
+        <button class="btn" onclick="App.newBlock()"
+          onmousedown="event.preventDefault()"
+          title="Insert the next block label. Also fires automatically when a new line is detected after a cassette entry.">
+          + Block
+        </button>
+        <button class="btn" id="btn-new-specimen" onclick="App.newSpecimen()"
+          onmousedown="event.preventDefault()"
+          title="Clear gross and specimen, keep clinical history for next specimen in this case.">
+          + Specimen
+        </button>
+        <button class="btn danger" onclick="App.undoInsert()"
+          onmousedown="event.preventDefault()"
+          title="Undo last change (Ctrl+Z)">
+          ↩ Undo
+        </button>
+        <button class="btn" onclick="App.redoInsert()"
+          onmousedown="event.preventDefault()"
+          title="Redo last change (Ctrl+Y)">
+          Redo ↪
+        </button>
+        <button class="btn" onclick="App.openHistoryModal()"
+          onmousedown="event.preventDefault()"
+          title="View change history tape">
+          History
+        </button>
+
+        <!-- Paste from clipboard -->
+        <button class="btn paste-btn" id="btn-paste"
+          onclick="App.pasteFromClipboard()"
+          onmousedown="event.preventDefault()"
+          title="Paste from clipboard (replaces all text)">
+          Paste
+        </button>
+
+        <!-- Field advancement -->
+        <div class="field-adv-group" id="field-adv-group">
+          <button class="btn" id="btn-prev-field"
+            title="Previous Field">
+            ◀ Prev
+          </button>
+          <button class="btn next-field" id="btn-next-field"
+            title="Next Field — right-click or double-click to toggle auto-advance">
+            ▶ Next
+          </button>
+          <button class="btn" id="btn-field-prefs"
+            style="padding:6px 9px;font-size:12px"
+            onmousedown="event.preventDefault()"
+            title="Field advance settings">⚙</button>
+          <span class="field-counter" id="field-counter"></span>
+          <!-- Settings popover -->
+          <div class="field-prefs-panel" id="field-prefs-panel">
+            <div class="field-prefs-title">Field Advance Settings</div>
+            <div class="field-prefs-row">
+              <span class="field-prefs-label">Delay (ms)</span>
+              <input type="number" class="field-prefs-input" id="pref-delay"
+                min="300" max="8000" step="100" value="1500">
+            </div>
+            <div class="field-prefs-row">
+              <span class="field-prefs-label">Pause chars</span>
+              <div class="field-prefs-chips" id="pref-cont-chars"></div>
+              <button class="pref-chip-add" id="pref-add-char" title="Add pause character">+</button>
+            </div>
+            <div class="field-prefs-row">
+              <span class="field-prefs-label">Pause words</span>
+              <div class="field-prefs-chips" id="pref-cont-words"></div>
+              <button class="pref-chip-add" id="pref-add-word" title="Add pause word">+</button>
+            </div>
+            <div class="field-prefs-row">
+              <span class="field-prefs-label">Learned</span>
+              <div class="field-prefs-chips" id="pref-learned"></div>
+              <button class="pref-clear-btn" id="pref-clear-learned">Clear all</button>
+            </div>
+          </div>
+        </div>
+
+        <div style="flex:1"></div>
+        <button class="btn" id="btn-reparse" onclick="App.detectFromPaste()"
+          onmousedown="event.preventDefault()"
+          title="Re-scan the gross text: saves template to database, checks for filled-in specimen site, refreshes block map. Use after edits or if auto-detection missed on paste.">
+          ⟳ Re-parse
+        </button>
+      </div>
+
+      <textarea id="dictation" spellcheck="false"
+        placeholder="Paste your template here, or begin dictating.
+
+The app will detect the specimen type as you fill in the template,
+and auto-advance cassette block labels as you work."></textarea>
+
+      <div class="dictation-footer">
+        <span class="footer-stat" id="char-count">0 chars</span>
+        <span id="next-block-preview"></span>
+        <span class="footer-stat footer-adv-status" id="field-adv-status"></span>
+        <span class="footer-stat" id="block-count">0 blocks</span>
+      </div>
+    </div>
+
+    <!-- Sidebar — always visible -->
+    <div class="sidebar">
+
+      <!-- Word cloud -->
+      <div class="sidebar-section" id="sidebar-cloud-wrap">
+        <div class="sidebar-head" onclick="App.toggleSection('cloud')" style="cursor:pointer">
+          <span class="sidebar-title">Grossing Terms</span>
+          <div style="display:flex;align-items:center;gap:8px">
+            <button class="btn" id="btn-templates"
+              onclick="event.stopPropagation();App.openTemplateModal()"
+              onmousedown="event.preventDefault()"
+              style="padding:2px 8px;font-size:10px;height:20px;line-height:1"
+              title="Suggested blank templates for this specimen">Templates</button>
+            <span class="sidebar-toggle" id="toggle-cloud">▾</span>
+          </div>
+        </div>
+        <div class="sidebar-body" id="section-cloud">
+          <div id="word-cloud">
+            <span class="cloud-empty">Select a specimen to load suggestions</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Block map -->
+      <div class="sidebar-section">
+        <div class="sidebar-head" onclick="App.toggleSection('blocks')">
+          <span class="sidebar-title">Block Map</span>
+          <span class="sidebar-toggle" id="toggle-blocks">▾</span>
+        </div>
+        <div class="sidebar-body" id="section-blocks">
+          <div id="block-map">
+            <span style="font-size:12px;color:var(--muted2);font-style:italic">No blocks detected</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Similar cases -->
+      <div class="sidebar-section" id="sidebar-similar-wrap">
+        <div class="sidebar-head" onclick="App.toggleSection('similar')">
+          <span class="sidebar-title">Similar Cases</span>
+          <span class="sidebar-toggle" id="toggle-similar">▾</span>
+        </div>
+        <div class="sidebar-body" id="section-similar">
+          <div id="similar-list">
+            <span class="sim-empty">Suggestions will appear as you type</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Rapid mode info (hidden unless rapid mode is ON) -->
+      <div class="sidebar-section" id="rapid-sidebar-section" style="display:none">
+        <div class="sidebar-head">
+          <span class="sidebar-title">⚡ Rapid Mode</span>
+        </div>
+        <div class="sidebar-body">
+          <div id="rapid-status">Paste template to begin</div>
+          <div class="rapid-hint">
+            Paste your template to save it and start specimen&nbsp;1.<br>
+            Auto-advance walks through <code>[___]</code> fields.<br>
+            <code>[___]-suffix</code> lines get the cassette key; cursor lands left of <code>-</code> for range editing.<br>
+            When all fields are complete, the next specimen is appended automatically.
+          </div>
+          <button class="btn full" onclick="App.copyToClipboard()"
+            style="margin-top:4px">
+            Copy all to clipboard
+            <sub>Paste back into APIS when done</sub>
+          </button>
+        </div>
+      </div>
+
+      <!-- Controls -->
+      <div class="sidebar-section">
+        <div class="sidebar-head" onclick="App.toggleSection('controls')">
+          <span class="sidebar-title">Controls</span>
+          <span class="sidebar-toggle" id="toggle-controls">▾</span>
+        </div>
+        <div class="sidebar-body" id="section-controls">
+          <div class="btn-group">
+            <button class="btn full" id="btn-copy-sidebar" onclick="App.copyToClipboard()">
+              Copy to clipboard
+              <sub>Paste back into APIS</sub>
+            </button>
+            <button class="btn full" onclick="App.submitCase()">
+              Submit completed case
+              <sub>Saves gross + updates term stats</sub>
+            </button>
+            <button class="btn full danger" onclick="App.clearAll()">
+              New case
+              <sub>Clears everything</sub>
+            </button>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+<div id="cloud-tooltip"></div>
+
+<!-- ── Template browser modal ───────────────────────────────────────── -->
+<div id="tmpl-modal-overlay" class="tmpl-modal-overlay" style="display:none"
+     onclick="App.closeTemplateModal()">
+  <div class="tmpl-modal" onclick="event.stopPropagation()">
+
+    <!-- Header: title + search bar + close -->
+    <div class="tmpl-modal-header">
+      <span class="tmpl-modal-title">Templates</span>
+      <div class="tmpl-search-wrap">
+        <span class="tmpl-search-icon">⌕</span>
+        <input id="tmpl-search-input" class="tmpl-search-input"
+               type="text" placeholder="Search by specimen, history, or keyword…"
+               autocomplete="off" spellcheck="false"
+               oninput="App._tmplSearchInput(event)"
+               onkeydown="App._tmplSearchKeydown(event)">
+      </div>
+      <button class="btn" onclick="App.closeTemplateModal()"
+        onmousedown="event.preventDefault()"
+        style="padding:2px 8px;flex-shrink:0">✕</button>
+    </div>
+
+    <!-- Two-pane body -->
+    <div class="tmpl-modal-body">
+
+      <!-- Left: scrollable card list -->
+      <div id="tmpl-card-list" class="tmpl-card-list">
+        <div class="tmpl-empty">Loading…</div>
+      </div>
+
+      <!-- Right: full template preview -->
+      <div class="tmpl-preview-pane">
+        <pre id="tmpl-preview-text" class="tmpl-preview-text"></pre>
+        <div class="tmpl-preview-footer">
+          <span class="tmpl-hint-row">Double-click a template to apply instantly</span>
+          <button class="btn" onclick="App.closeTemplateModal()"
+                  onmousedown="event.preventDefault()">Cancel</button>
+          <button id="tmpl-apply-btn" class="btn btn-primary" disabled
+                  onclick="App.applyTemplate()"
+                  onmousedown="event.preventDefault()">Apply Template</button>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<!-- bump version string on every JS deploy -->
+<script src="js/cassette.js?v=2.0"></script>
+<script src="js/api.js?v=2.1"></script>
+<script src="js/rapid.js?v=2.0"></script>
+<script src="js/app.js?v=2.1"></script>
+
+<!-- ── History tape modal ─────────────────────────────────────────────── -->
+<div id="history-modal-overlay" class="history-modal-overlay" style="display:none"
+     onclick="App.closeHistoryModal()">
+  <div class="history-modal" onclick="event.stopPropagation()">
+    <div class="history-modal-header">
+      <span class="history-modal-title">Change History</span>
+      <button class="btn" onclick="App.closeHistoryModal()"
+        onmousedown="event.preventDefault()"
+        style="padding:2px 8px">✕</button>
+    </div>
+    <div class="history-modal-hint">
+      Most recent first &mdash; click any entry to restore that state &mdash; Undo/Redo navigates this tape
+    </div>
+    <div id="history-tape-list" class="history-tape-list"></div>
+  </div>
+</div>
+</body>
+</html>

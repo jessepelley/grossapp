@@ -37,6 +37,13 @@ const API = (() => {
     // ── Templates ─────────────────────────────────────────────────────────────
     const templates = {
         // Fetch saved blank templates for a specimen (for the Template modal)
+        // Free-text search across all templates, optionally boosted by context
+        search: (q, specimen_id) => {
+            const params = new URLSearchParams({ q: q ?? '' });
+            if (specimen_id) params.set('specimen_id', specimen_id);
+            return request(`templates_search.php?${params}`);
+        },
+        // Fetch saved blank templates for a specimen (legacy, used internally)
         forSpecimen: (specimen_id) =>
             request(`templates_suggest.php?specimen_id=${specimen_id}`),
         submit: (specimen_id, raw_text) =>

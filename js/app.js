@@ -777,59 +777,161 @@ const App = (() => {
 
     // ── Template suggestions ──────────────────────────────────────────────────
 
+    // ── Template browser modal ────────────────────────────────────────────────
+    // Works in two modes:
+    //   • No context (blank case): search bar active, shows all templates
+    //   • With context (specimen set): pre-loads relevant templates, still searchable
+    //
+    // Two-pane layout: card list on left, full text preview on right.
+    // Clicking a card populates the preview. Double-click or Apply button applies.
+
+    let _cachedTemplates = [];
+    let _tmplSearchTimer = null;
+    let _tmplSelectedIdx = null;
+
     async function openTemplateModal() {
-        if (!state.specimen) { toast('Select a specimen first', ''); return; }
         const overlay = document.getElementById('tmpl-modal-overlay');
-        const list    = document.getElementById('tmpl-modal-list');
         if (!overlay) return;
-        list.innerHTML = '<div class="tmpl-empty">Loading…</div>';
         overlay.style.display = 'flex';
 
-        try {
-            const data = await API.templates.forSpecimen(state.specimen.id);
-            renderTemplateList(data || []);
-        } catch (e) {
-            list.innerHTML = '<div class="tmpl-empty">Could not load templates</div>';
-            console.warn('Template fetch failed:', e);
+        // Focus the search box
+        const searchEl = document.getElementById('tmpl-search-input');
+        if (searchEl) {
+            searchEl.value = '';
+            setTimeout(() => searchEl.focus(), 60);
         }
+
+        // Clear preview
+        _tmplSelectedIdx = null;
+        _renderTemplatePreview(null);
+
+        // Load initial results:
+        // If specimen is set, pre-seed query with specimen name for instant relevance.
+        // If not, load all templates ordered by usage.
+        const initialQ = state.specimen?.name ?? '';
+        if (searchEl) searchEl.value = initialQ;
+        await _loadTemplateResults(initialQ);
     }
 
     function closeTemplateModal() {
         const overlay = document.getElementById('tmpl-modal-overlay');
         if (overlay) overlay.style.display = 'none';
+        _tmplSelectedIdx = null;
     }
 
-    function renderTemplateList(templates) {
-        const list = document.getElementById('tmpl-modal-list');
+    async function _loadTemplateResults(q) {
+        const list = document.getElementById('tmpl-card-list');
+        if (!list) return;
+        list.innerHTML = '<div class="tmpl-empty">Searching…</div>';
+
+        try {
+            const specimenId = state.specimen?.id ?? null;
+            const resp = await API.templates.search(q, specimenId);
+            const templates = resp?.data ?? [];
+            _cachedTemplates = templates;
+            _renderTemplateCards(templates, q);
+            // Auto-select first card if results exist
+            if (templates.length > 0) {
+                _selectTemplateCard(0);
+            } else {
+                _renderTemplatePreview(null);
+            }
+        } catch (e) {
+            list.innerHTML = '<div class="tmpl-empty">Could not load templates.</div>';
+            console.warn('Template search failed:', e);
+        }
+    }
+
+    function _renderTemplateCards(templates, q) {
+        const list = document.getElementById('tmpl-card-list');
         if (!list) return;
 
         if (!templates || templates.length === 0) {
-            list.innerHTML = `<div class="tmpl-empty">No templates saved for "${_esc(state.specimen?.name || 'this specimen')}" yet.<br><br>Paste a template into the dictation area to save it.</div>`;
+            const msg = q
+                ? `<div class="tmpl-empty">No templates match "<strong>${_esc(q)}</strong>".<br><br>Paste a gross description to save one.</div>`
+                : '<div class="tmpl-empty">No templates saved yet.<br><br>Paste a gross description to save one.</div>';
+            list.innerHTML = msg;
             return;
         }
 
         list.innerHTML = templates.map((t, i) => {
-            const ph     = t.placeholders ?? t.placeholder_count ?? '?';
-            const date   = t.created_at ? t.created_at.substring(0, 10) : '';
-            const uses   = t.use_count  != null ? `${t.use_count} uses` : '';
-            const preview = (t.raw_text || '').substring(0, 300);
-            return `<div class="tmpl-item" onclick="App.applyTemplate(${i})">
-                <div class="tmpl-item-head">
-                    <span class="tmpl-item-specimen">${_esc(t.specimen_name || state.specimen?.name || '')}</span>
-                    <span class="tmpl-item-meta">${ph} fields${uses ? ' · ' + uses : ''}${date ? ' · ' + date : ''}</span>
-                </div>
-                <div class="tmpl-item-preview">${_esc(preview)}${preview.length < (t.raw_text||'').length ? '…' : ''}</div>
+            const spec  = t.specimen_name || '—';
+            const uses  = t.use_count > 0 ? `${t.use_count}×` : 'new';
+            const fields = t.placeholder_count ?? 0;
+            const hints = (t.placeholder_hints ?? []).slice(0, 3).map(h => `<span class="tmpl-hint">${_esc(h)}</span>`).join('');
+            return `<div class="tmpl-card" data-idx="${i}" onclick="App._tmplSelectCard(${i})" ondblclick="App.applyTemplate(${i})">
+                <div class="tmpl-card-spec">${_esc(spec)}</div>
+                <div class="tmpl-card-meta">${fields} fields · ${uses}</div>
+                ${hints ? `<div class="tmpl-card-hints">${hints}</div>` : ''}
             </div>`;
         }).join('');
-
-        // Cache templates for applyTemplate()
-        _cachedTemplates = templates;
     }
 
-    let _cachedTemplates = [];
+    function _selectTemplateCard(idx) {
+        _tmplSelectedIdx = idx;
+        // Highlight selected card
+        document.querySelectorAll('.tmpl-card').forEach((el, i) => {
+            el.classList.toggle('tmpl-card-selected', i === idx);
+        });
+        _renderTemplatePreview(_cachedTemplates[idx] ?? null);
+    }
+
+    // Exposed to onclick in rendered HTML
+    function _tmplSelectCard(idx) { _selectTemplateCard(idx); }
+
+    function _renderTemplatePreview(tmpl) {
+        const el = document.getElementById('tmpl-preview-text');
+        const applyBtn = document.getElementById('tmpl-apply-btn');
+        if (!el) return;
+
+        if (!tmpl) {
+            el.textContent = '';
+            el.style.color = 'var(--muted2)';
+            el.style.fontStyle = 'italic';
+            if (applyBtn) applyBtn.disabled = true;
+            return;
+        }
+
+        // Render with placeholder highlighting
+        const raw   = tmpl.raw_text || '';
+        // Escape HTML, then re-highlight placeholders
+        const html  = _esc(raw).replace(/\[([^\]]*)\]/g,
+            '<mark class="tmpl-ph">[$1]</mark>');
+        el.innerHTML = html;
+        el.style.color = '';
+        el.style.fontStyle = '';
+        if (applyBtn) applyBtn.disabled = false;
+
+        // Scroll preview to top
+        el.scrollTop = 0;
+    }
+
+    function _tmplSearchKeydown(e) {
+        // Arrow keys navigate the card list
+        const cards = document.querySelectorAll('.tmpl-card');
+        if (!cards.length) return;
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+            e.preventDefault();
+            const cur = _tmplSelectedIdx ?? -1;
+            const next = e.key === 'ArrowDown'
+                ? Math.min(cur + 1, cards.length - 1)
+                : Math.max(cur - 1, 0);
+            _selectTemplateCard(next);
+            cards[next]?.scrollIntoView({ block: 'nearest' });
+        } else if (e.key === 'Enter' && _tmplSelectedIdx !== null) {
+            applyTemplate(_tmplSelectedIdx);
+        }
+    }
+
+    function _tmplSearchInput(e) {
+        clearTimeout(_tmplSearchTimer);
+        _tmplSearchTimer = setTimeout(() => {
+            _loadTemplateResults(e.target.value.trim());
+        }, 280);
+    }
 
     function applyTemplate(idx) {
-        const tmpl = _cachedTemplates[idx];
+        const tmpl = _cachedTemplates[idx ?? _tmplSelectedIdx];
         if (!tmpl) return;
         const ta = document.getElementById('dictation');
         ta.value = tmpl.raw_text || '';
@@ -2103,7 +2205,8 @@ const App = (() => {
         goToNextField, goPrevField, toggleAutoAdvance, toggleFieldPrefs,
         pasteFromClipboard,
         openHistoryModal, closeHistoryModal, restoreHistoryEntry,
-        openTemplateModal, closeTemplateModal, applyTemplate
+        openTemplateModal, closeTemplateModal, applyTemplate,
+        _tmplSelectCard, _tmplSearchInput, _tmplSearchKeydown
     };
 
 })();
