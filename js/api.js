@@ -37,11 +37,18 @@ const API = (() => {
     // ── Templates ─────────────────────────────────────────────────────────────
     const templates = {
         // Fetch saved blank templates for a specimen (for the Template modal)
-        // Free-text search across all templates, optionally boosted by context
-        search: (q, specimen_id) => {
+        // Free-text search across all templates, optionally boosted by context.
+        // Returns full { ok, data, count, query } — does NOT go through request()
+        // because templates_search.php returns extra fields beyond just .data.
+        search: async (q, specimen_id) => {
             const params = new URLSearchParams({ q: q ?? '' });
             if (specimen_id) params.set('specimen_id', specimen_id);
-            return request(`templates_search.php?${params}`);
+            const res  = await fetch(`${BASE}/templates_search.php?${params}`, {
+                headers: { 'Content-Type': 'application/json' }
+            });
+            const json = await res.json();
+            if (!json.ok) throw new Error(json.error || 'Template search error');
+            return json;  // caller uses json.data
         },
         // Fetch saved blank templates for a specimen (legacy, used internally)
         forSpecimen: (specimen_id) =>
