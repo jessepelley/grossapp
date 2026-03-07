@@ -1,5 +1,5 @@
 /**
- * api.js
+ * api.js  v2.1
  * All communication with the PHP backend lives here.
  * Import or include before app.js.
  */
@@ -46,6 +46,10 @@ const API = (() => {
     };
 
     // ── Suggestions ───────────────────────────────────────────────────────────
+    // Returns full data object including:
+    //   terms[]     — database terms with scores
+    //   llm_terms[] — Anthropic API terms (strings)
+    //   source      — 'database' | 'llm' | 'mixed' | 'empty'
     const suggestions = {
         get: (specimen_id, history_ids, primary_history_id) => {
             const ids = history_ids.join(',');
@@ -57,6 +61,23 @@ const API = (() => {
         }
     };
 
+    // ── Similarity search ─────────────────────────────────────────────────────
+    // Finds past cases similar to the current gross text using TF-IDF cosine
+    // similarity on stored case_tokens. POST body carries gross_text since it
+    // can be large; query params carry options.
+    // Returns: { similar[], query_tokens, total_docs }
+    //   similar[]: { case_id, similarity, specimen, histories, excerpt, gross_chars, submitted_at }
+    const similarity = {
+        find: (gross_text, specimen_id, limit = 5) =>
+            request(
+                `similarity.php?specimen_id=${encodeURIComponent(specimen_id)}&limit=${limit}`,
+                {
+                    method: 'POST',
+                    body: JSON.stringify({ gross_text })
+                }
+            )
+    };
+
     // ── Cases ─────────────────────────────────────────────────────────────────
     const cases = {
         submit: (payload) =>
@@ -66,6 +87,6 @@ const API = (() => {
             })
     };
 
-    return { specimens, histories, templates, suggestions, cases };
+    return { specimens, histories, templates, suggestions, similarity, cases };
 
 })();

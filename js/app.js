@@ -13,7 +13,7 @@ const App = (() => {
         template_id: null,
         termsShown:  [],
         termsUsed:   [],
-        sections:    { cloud: true, blocks: true, controls: true },
+        sections:    { cloud: true, blocks: true, similar: true, controls: true },
         submitted:   false,
         theme:       'light',   // 'light' | 'dark'
         format:      'letter-number' // 'letter-number' | 'number-letter'
@@ -114,6 +114,7 @@ const App = (() => {
             refreshFieldCounter();
             updateFieldAdvStatus();
             updateCopyBtn();
+            fetchSimilar();
         });
 
         // Ctrl+Z → undo; Ctrl+Y / Ctrl+Shift+Z → redo
@@ -485,7 +486,7 @@ const App = (() => {
         clearTimeout(suggestionDebounce);
         suggestionDebounce = setTimeout(async () => {
             try {
-                setLlmDot(true);
+                setSourceDots('loading');
                 const primary = state.histories.find(h => h.is_primary);
                 const allIds  = state.histories.map(h => h.id);
                 const data    = await API.suggestions.get(
@@ -499,9 +500,16 @@ const App = (() => {
                 const all      = [...dbTerms, ...llmTerms];
                 state.termsShown = all;
                 renderWordCloud(all, data.terms || []);
-                setLlmDot(false);
+                // Update dots based on actual source
+                const source = data.source || (dbTerms.length > 0 && llmTerms.length > 0 ? 'mixed'
+                             : dbTerms.length > 0 ? 'database'
+                             : llmTerms.length > 0 ? 'llm'
+                             : 'empty');
+                setSourceDots(source);
+                // Also refresh similarity whenever suggestions fire (specimen change etc.)
+                fetchSimilar();
             } catch (e) {
-                setLlmDot(false);
+                setSourceDots('idle');
                 console.warn('Suggestions fetch failed:', e);
             }
         }, 300);
@@ -578,6 +586,60 @@ const App = (() => {
         ta.selectionStart = ta.selectionEnd = start + insert.length;
         ta.focus();
         ta.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+
+    // ── Similar cases ─────────────────────────────────────────────────────────
+
+    let _similarDebounce = null;
+
+    function fetchSimilar() {
+        if (Rapid.isActive()) return;
+        if (!state.specimen) return;
+        const gross = document.getElementById('dictation').value;
+        if (gross.length < 80) return;   // too short to be meaningful
+        clearTimeout(_similarDebounce);
+        _similarDebounce = setTimeout(async () => {
+            try {
+                const data = await API.similarity.find(gross, state.specimen.id, 5);
+                renderSimilarCases(data.similar || []);
+            } catch (e) {
+                console.warn('Similarity fetch failed:', e);
+            }
+        }, 1800);   // debounce longer than suggestions — runs after idle typing
+    }
+
+    function renderSimilarCases(cases) {
+        const list = document.getElementById('similar-list');
+        if (!list) return;
+
+        if (cases.length === 0) {
+            list.innerHTML = '<span class="sim-empty">No similar cases found yet</span>';
+            return;
+        }
+
+        list.innerHTML = cases.map(c => {
+            const pct   = Math.round(c.similarity * 100);
+            const cls   = pct >= 70 ? 'high' : pct >= 40 ? 'medium' : 'low';
+            const hist  = c.histories || '—';
+            const date  = c.submitted_at ? c.submitted_at.substring(0, 10) : '';
+            const chars = c.gross_chars ? `${c.gross_chars} chars` : '';
+            // Clean excerpt: strip leading specimen header line
+            const excerptRaw = (c.excerpt || '').replace(/^[A-Z]\.\s.*\n?/, '').trim();
+            const excerpt    = excerptRaw.substring(0, 110);
+            return `<div class="sim-card">
+                <div class="sim-card-head">
+                    <span class="sim-specimen">${_esc(c.specimen || 'Unknown specimen')}</span>
+                    <span class="sim-score ${cls}">${pct}%</span>
+                </div>
+                <div class="sim-histories">${_esc(hist)}</div>
+                <div class="sim-excerpt">${_esc(excerpt)}${excerptRaw.length > 110 ? '…' : ''}</div>
+                <div class="sim-meta">${date}${chars ? ' · ' + chars : ''}</div>
+            </div>`;
+        }).join('');
+    }
+
+    function _esc(s) {
+        return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
     }
 
     // ── Paste / template detection ────────────────────────────────────────────
@@ -1104,11 +1166,67 @@ const App = (() => {
     }
 
     // ── Status dots ───────────────────────────────────────────────────────────
+    // source: 'loading' | 'database' | 'llm' | 'mixed' | 'empty' | 'idle'
+    function setSourceDots(source) {
+        const dotDb  = document.getElementById('dot-db');
+        const dotLlm = document.getElementById('dot-llm');
+        const lblDb  = document.getElementById('label-db');
+        const lblLlm = document.getElementById('label-llm');
+        const pillDb  = document.getElementById('pill-db');
+        const pillLlm = document.getElementById('pill-llm');
+
+        // Reset both
+        dotDb.className  = 'dot';
+        dotLlm.className = 'dot';
+
+        switch (source) {
+            case 'loading':
+                dotLlm.className  = 'dot warn';
+                lblLlm.textContent = 'LLM loading…';
+                lblDb.textContent  = 'Database';
+                if (pillDb)  pillDb.title  = 'Database: waiting for response';
+                if (pillLlm) pillLlm.title = 'LLM: request in progress';
+                break;
+            case 'database':
+                dotDb.className   = 'dot on';
+                lblDb.textContent  = 'Database';
+                lblLlm.textContent = 'LLM';
+                if (pillDb)  pillDb.title  = 'Suggestions: from your case database';
+                if (pillLlm) pillLlm.title = 'LLM: not used (enough database terms)';
+                break;
+            case 'llm':
+                dotLlm.className  = 'dot llm';
+                lblDb.textContent  = 'Database';
+                lblLlm.textContent = 'LLM ✓';
+                if (pillDb)  pillDb.title  = 'Database: not enough cases yet for this specimen';
+                if (pillLlm) pillLlm.title = 'Suggestions: from Anthropic API (Claude)';
+                break;
+            case 'mixed':
+                dotDb.className   = 'dot mixed';
+                dotLlm.className  = 'dot llm';
+                lblDb.textContent  = 'Database ✓';
+                lblLlm.textContent = 'LLM ✓';
+                if (pillDb)  pillDb.title  = 'Database terms shown first';
+                if (pillLlm) pillLlm.title = 'LLM terms supplementing database (mixed source)';
+                break;
+            case 'empty':
+                lblDb.textContent  = 'Database';
+                lblLlm.textContent = 'LLM';
+                if (pillDb)  pillDb.title  = 'Database: no terms found';
+                if (pillLlm) pillLlm.title = 'LLM: no response';
+                break;
+            default: // 'idle'
+                lblDb.textContent  = 'Database';
+                lblLlm.textContent = 'LLM';
+                if (pillDb)  pillDb.title  = 'Database: idle';
+                if (pillLlm) pillLlm.title = 'LLM: idle';
+        }
+    }
+
+    // Legacy shim — called by cassette:advance and other code paths
     function setLlmDot(active) {
-        const dot   = document.getElementById('dot-llm');
-        const label = document.getElementById('label-llm');
-        dot.className   = 'dot' + (active ? ' warn' : '');
-        label.textContent = active ? 'LLM loading…' : 'LLM';
+        if (active) setSourceDots('loading');
+        // on false, leave dots in their last result state (don't reset to idle)
     }
 
     // ── Toast ─────────────────────────────────────────────────────────────────
