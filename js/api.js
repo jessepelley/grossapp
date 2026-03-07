@@ -6,7 +6,7 @@
 
 const API = (() => {
 
-    const BASE = 'https://jjjp.ca/grossapp';
+    const BASE = 'https://api.jjjp.ca/grossapp';
 
     async function request(endpoint, options = {}) {
         const res = await fetch(`${BASE}/${endpoint}`, {
