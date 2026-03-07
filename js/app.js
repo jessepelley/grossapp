@@ -114,7 +114,6 @@ const App = (() => {
             refreshFieldCounter();
             updateFieldAdvStatus();
             updateCopyBtn();
-            fetchSimilar();
         });
 
         // Ctrl+Z → undo; Ctrl+Y / Ctrl+Shift+Z → redo
@@ -297,7 +296,10 @@ const App = (() => {
 
         // Close history modal on Escape
         document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape') closeHistoryModal();
+            if (e.key === 'Escape') {
+                closeHistoryModal();
+                closeTemplateModal();
+            }
         });
 
         // Restore saved draft unconditionally on load (prevents information loss on reload)
@@ -480,8 +482,29 @@ const App = (() => {
     // ── Suggestions / word cloud ──────────────────────────────────────────────
     let suggestionDebounce = null;
 
+    // ── Unified suggestions + similarity pipeline ─────────────────────────────
+    //
+    // Both requests run in parallel.  When both settle, terms are blended into
+    // a single ranked cloud using a composite score:
+    //
+    //   score = (db_usage_weight * DB_WEIGHT)
+    //         + (llm_rank_weight  * LLM_WEIGHT)
+    //         + (sim_term_boost   * SIM_WEIGHT)
+    //
+    // where sim_term_boost = average(similarity * tf_idf) across similar cases
+    // that contained this term.
+    //
+    // Each rendered term carries a data-meta attribute used by hover tooltips.
+
+    const CLOUD_DB_WEIGHT  = 1.0;
+    const CLOUD_LLM_WEIGHT = 0.4;
+    const CLOUD_SIM_WEIGHT = 0.7;
+
+    // Cache of the last similarity result for the sidebar panel.
+    let _lastSimilarData = null;
+
     async function fetchSuggestions() {
-        if (Rapid.isActive()) return;  // no API calls in rapid mode
+        if (Rapid.isActive()) return;
         if (!state.specimen) return;
         clearTimeout(suggestionDebounce);
         suggestionDebounce = setTimeout(async () => {
@@ -489,57 +512,164 @@ const App = (() => {
                 setSourceDots('loading');
                 const primary = state.histories.find(h => h.is_primary);
                 const allIds  = state.histories.map(h => h.id);
-                const data    = await API.suggestions.get(
-                    state.specimen.id,
-                    allIds,
-                    primary?.id ?? 0
-                );
-                // Merge DB terms and LLM terms, DB terms first
-                const dbTerms  = (data.terms || []).map(t => t.term);
-                const llmTerms = (data.llm_terms || []).filter(t => !dbTerms.includes(t.toLowerCase()));
-                const all      = [...dbTerms, ...llmTerms];
-                state.termsShown = all;
-                renderWordCloud(all, data.terms || []);
-                // Update dots based on actual source
-                const source = data.source || (dbTerms.length > 0 && llmTerms.length > 0 ? 'mixed'
-                             : dbTerms.length > 0 ? 'database'
-                             : llmTerms.length > 0 ? 'llm'
-                             : 'empty');
-                setSourceDots(source);
-                // Also refresh similarity whenever suggestions fire (specimen change etc.)
-                fetchSimilar();
+                const gross   = document.getElementById('dictation').value;
+
+                // Fire both requests in parallel
+                const [sugData, simData] = await Promise.allSettled([
+                    API.suggestions.get(state.specimen.id, allIds, primary?.id ?? 0),
+                    gross.length >= 80
+                        ? API.similarity.find(gross, state.specimen.id, 5)
+                        : Promise.resolve({ similar: [], query_tokens: 0 })
+                ]);
+
+                const sug = sugData.status === 'fulfilled' ? sugData.value : { terms: [], llm_terms: [] };
+                const sim = simData.status === 'fulfilled' ? simData.value : { similar: [] };
+
+                _lastSimilarData = sim;
+                renderSimilarCases(sim.similar || []);
+
+                // ── Build per-term metadata map ───────────────────────────────
+
+                // DB terms: { term, score (tf-idf/usage weight), times_shown, times_used }
+                const dbMap = {};
+                (sug.terms || []).forEach((t, i) => {
+                    const key = t.term.toLowerCase();
+                    dbMap[key] = {
+                        term:        t.term,
+                        db_score:    t.score ?? (1 - i * 0.02),   // fallback: rank decay
+                        times_shown: t.times_shown ?? 0,
+                        times_used:  t.times_used  ?? 0,
+                        source:      'db',
+                    };
+                });
+
+                // LLM terms: rank-decayed weight
+                const llmMap = {};
+                (sug.llm_terms || []).forEach((term, i) => {
+                    const key = typeof term === 'string' ? term.toLowerCase() : term.term?.toLowerCase();
+                    const label = typeof term === 'string' ? term : term.term;
+                    if (!key || dbMap[key]) return;   // skip if already in DB
+                    llmMap[key] = {
+                        term:     label,
+                        llm_rank: i,
+                        source:   'llm',
+                    };
+                });
+
+                // Similar-case term aggregates:
+                //   simTermMap[term] = { count, total_boost, cases[] }
+                //   where total_boost = sum(similarity * tf_idf_score)
+                const simTermMap = {};
+                (sim.similar || []).forEach(c => {
+                    const sim_score = c.similarity || 0;
+                    (c.top_terms || []).forEach(t => {
+                        const key   = t.term.toLowerCase();
+                        const boost = sim_score * (t.tf_idf ?? 0.1);
+                        if (!simTermMap[key]) {
+                            simTermMap[key] = { term: t.term, count: 0, total_boost: 0, cases: [] };
+                        }
+                        simTermMap[key].count++;
+                        simTermMap[key].total_boost += boost;
+                        simTermMap[key].cases.push(Math.round(sim_score * 100));
+                    });
+                });
+
+                // ── Compose unified scored list ───────────────────────────────
+
+                const allKeys = new Set([
+                    ...Object.keys(dbMap),
+                    ...Object.keys(llmMap),
+                    ...Object.keys(simTermMap),
+                ]);
+
+                const scored = [];
+                allKeys.forEach(key => {
+                    const db  = dbMap[key];
+                    const llm = llmMap[key];
+                    const sim = simTermMap[key];
+
+                    // Determine display label (prefer DB > simTerm > LLM)
+                    const term = (db?.term) || (sim?.term) || (llm?.term) || key;
+
+                    const dbScore  = db  ? db.db_score * CLOUD_DB_WEIGHT  : 0;
+                    const llmScore = llm ? (1 - (llm.llm_rank || 0) * 0.03) * CLOUD_LLM_WEIGHT : 0;
+                    const simScore = sim ? (sim.total_boost / Math.max(1, sim.count)) * CLOUD_SIM_WEIGHT : 0;
+                    const total    = dbScore + llmScore + simScore;
+
+                    // Build tooltip metadata string (used by hover)
+                    const metaParts = [];
+                    if (db) {
+                        const pct = db.times_shown > 0
+                            ? Math.round(db.times_used / db.times_shown * 100) : 0;
+                        metaParts.push(`DB · used ${db.times_used}/${db.times_shown} (${pct}%)`);
+                    }
+                    if (llm) metaParts.push(`LLM suggestion`);
+                    if (sim) {
+                        const avg = Math.round(sim.cases.reduce((a,b)=>a+b,0)/sim.cases.length);
+                        metaParts.push(`Similar cases: ${sim.count} (avg ${avg}% match)`);
+                    }
+
+                    scored.push({
+                        term,
+                        score: total,
+                        source: db ? (sim ? 'db-sim' : 'db') : (llm ? (sim ? 'llm-sim' : 'llm') : 'sim'),
+                        meta:  metaParts.join(' · '),
+                    });
+                });
+
+                scored.sort((a, b) => b.score - a.score);
+
+                state.termsShown = scored.map(s => s.term);
+                renderWordCloud(scored);
+
+                // Dot state
+                const hasDb  = Object.keys(dbMap).length  > 0;
+                const hasLlm = Object.keys(llmMap).length > 0;
+                const src = hasDb && hasLlm ? 'mixed' : hasDb ? 'database' : hasLlm ? 'llm' : 'empty';
+                setSourceDots(src);
+
             } catch (e) {
                 setSourceDots('idle');
-                console.warn('Suggestions fetch failed:', e);
+                console.warn('Suggestions pipeline failed:', e);
             }
         }, 300);
     }
 
-    function renderWordCloud(terms, dbTerms) {
+    // scored: [{ term, score, source, meta }]
+    function renderWordCloud(scored) {
         const cloud = document.getElementById('word-cloud');
         cloud.innerHTML = '';
 
-        if (terms.length === 0) {
+        if (!scored || scored.length === 0) {
             cloud.innerHTML = '<span class="cloud-empty">No suggestions yet</span>';
             return;
         }
 
         const grossText = document.getElementById('dictation').value.toLowerCase();
 
-        terms.forEach(term => {
-            const el    = document.createElement('span');
-            el.className = 'cloud-term';
+        scored.forEach(item => {
+            // item may be a string (legacy) or a { term, score, source, meta } object
+            const term   = typeof item === 'string' ? item : item.term;
+            const source = typeof item === 'string' ? 'db'  : (item.source || 'db');
+            const meta   = typeof item === 'string' ? ''    : (item.meta || '');
+
+            const el = document.createElement('span');
+            el.className   = 'cloud-term';
             el.textContent = term;
-            el.dataset.term = term;
+            el.dataset.term   = term;
+            el.dataset.source = source;
+            if (meta) el.dataset.meta = meta;
 
-            // Check if already used in gross
-            if (isTermUsed(term, grossText)) {
-                el.classList.add('used');
-            }
+            // Source-indicator class
+            if (source === 'llm' || source === 'llm-sim') el.classList.add('source-llm');
+            if (source === 'sim')                          el.classList.add('source-sim');
+            if (source === 'db-sim')                       el.classList.add('source-db-sim');
 
-            // Prevent focus loss from textarea when clicking a term
+            if (isTermUsed(term, grossText)) el.classList.add('used');
+
+            // Prevent focus loss
             el.addEventListener('mousedown', (e) => e.preventDefault());
-            // Click to insert at cursor
+            // Click to insert
             el.addEventListener('click', () => {
                 insertTerm(term);
                 el.classList.add('inserted');
@@ -547,6 +677,9 @@ const App = (() => {
 
             cloud.appendChild(el);
         });
+
+        // Attach hover tooltips now that elements exist in DOM
+        attachCloudTooltips();
     }
 
     function isTermUsed(term, text) {
@@ -578,7 +711,6 @@ const App = (() => {
         const start = ta.selectionStart;
         const end   = ta.selectionEnd;
         const text  = ta.value;
-        // Add a space before if cursor isn't at start of line or after space
         const before = text.substring(0, start);
         const needsSpace = before.length > 0 && !/[\s\n]$/.test(before);
         const insert = (needsSpace ? ' ' : '') + term;
@@ -588,52 +720,168 @@ const App = (() => {
         ta.dispatchEvent(new Event('input', { bubbles: true }));
     }
 
-    // ── Similar cases ─────────────────────────────────────────────────────────
+    // ── Word cloud hover tooltips ─────────────────────────────────────────────
 
-    let _similarDebounce = null;
+    // Floating tooltip showing term source + usage stats
+    const _cloudTip = {
+        el: null,
+        show(target, text) {
+            if (!this.el) this.el = document.getElementById('cloud-tooltip');
+            if (!this.el) return;
+            this.el.textContent = text;
+            this.el.classList.add('visible');
+            this._move(target);
+        },
+        hide() {
+            if (!this.el) return;
+            this.el.classList.remove('visible');
+        },
+        _move(target) {
+            if (!this.el) return;
+            const r   = target.getBoundingClientRect();
+            const tw  = this.el.offsetWidth  || 200;
+            const th  = this.el.offsetHeight || 60;
+            let left  = r.left + r.width / 2 - tw / 2;
+            let top   = r.top - th - 6;
+            if (left < 6)                      left = 6;
+            if (left + tw > window.innerWidth) left = window.innerWidth - tw - 6;
+            if (top < 6)                       top  = r.bottom + 6;
+            this.el.style.left = left + 'px';
+            this.el.style.top  = top  + 'px';
+        }
+    };
 
-    function fetchSimilar() {
-        if (Rapid.isActive()) return;
-        if (!state.specimen) return;
-        const gross = document.getElementById('dictation').value;
-        if (gross.length < 80) return;   // too short to be meaningful
-        clearTimeout(_similarDebounce);
-        _similarDebounce = setTimeout(async () => {
-            try {
-                const data = await API.similarity.find(gross, state.specimen.id, 5);
-                renderSimilarCases(data.similar || []);
-            } catch (e) {
-                console.warn('Similarity fetch failed:', e);
-            }
-        }, 1800);   // debounce longer than suggestions — runs after idle typing
+    // Wire tooltip events — called once after cloud renders
+    function attachCloudTooltips() {
+        document.querySelectorAll('.cloud-term').forEach(el => {
+            if (el.dataset.tipBound) return;
+            el.dataset.tipBound = '1';
+            el.addEventListener('mouseenter', () => {
+                const meta   = el.dataset.meta || '';
+                const source = el.dataset.source || 'db';
+                const term   = el.dataset.term  || el.textContent;
+                const srcLabel = {
+                    'db':      '📦 From your database',
+                    'llm':     '🤖 From LLM (Anthropic)',
+                    'sim':     '🔁 From similar cases',
+                    'db-sim':  '📦🔁 Database + similar boost',
+                    'llm-sim': '🤖🔁 LLM + similar boost',
+                }[source] || source;
+                const lines = [srcLabel];
+                if (meta) lines.push(meta);
+                _cloudTip.show(el, lines.join('\n'));
+            });
+            el.addEventListener('mouseleave', () => _cloudTip.hide());
+        });
     }
+
+    // ── Template suggestions ──────────────────────────────────────────────────
+
+    async function openTemplateModal() {
+        if (!state.specimen) { toast('Select a specimen first', ''); return; }
+        const overlay = document.getElementById('tmpl-modal-overlay');
+        const list    = document.getElementById('tmpl-modal-list');
+        if (!overlay) return;
+        list.innerHTML = '<div class="tmpl-empty">Loading…</div>';
+        overlay.style.display = 'flex';
+
+        try {
+            const data = await API.templates.forSpecimen(state.specimen.id);
+            renderTemplateList(data || []);
+        } catch (e) {
+            list.innerHTML = '<div class="tmpl-empty">Could not load templates</div>';
+            console.warn('Template fetch failed:', e);
+        }
+    }
+
+    function closeTemplateModal() {
+        const overlay = document.getElementById('tmpl-modal-overlay');
+        if (overlay) overlay.style.display = 'none';
+    }
+
+    function renderTemplateList(templates) {
+        const list = document.getElementById('tmpl-modal-list');
+        if (!list) return;
+
+        if (!templates || templates.length === 0) {
+            list.innerHTML = `<div class="tmpl-empty">No templates saved for "${_esc(state.specimen?.name || 'this specimen')}" yet.<br><br>Paste a template into the dictation area to save it.</div>`;
+            return;
+        }
+
+        list.innerHTML = templates.map((t, i) => {
+            const ph     = t.placeholders ?? t.placeholder_count ?? '?';
+            const date   = t.created_at ? t.created_at.substring(0, 10) : '';
+            const uses   = t.use_count  != null ? `${t.use_count} uses` : '';
+            const preview = (t.raw_text || '').substring(0, 300);
+            return `<div class="tmpl-item" onclick="App.applyTemplate(${i})">
+                <div class="tmpl-item-head">
+                    <span class="tmpl-item-specimen">${_esc(t.specimen_name || state.specimen?.name || '')}</span>
+                    <span class="tmpl-item-meta">${ph} fields${uses ? ' · ' + uses : ''}${date ? ' · ' + date : ''}</span>
+                </div>
+                <div class="tmpl-item-preview">${_esc(preview)}${preview.length < (t.raw_text||'').length ? '…' : ''}</div>
+            </div>`;
+        }).join('');
+
+        // Cache templates for applyTemplate()
+        _cachedTemplates = templates;
+    }
+
+    let _cachedTemplates = [];
+
+    function applyTemplate(idx) {
+        const tmpl = _cachedTemplates[idx];
+        if (!tmpl) return;
+        const ta = document.getElementById('dictation');
+        ta.value = tmpl.raw_text || '';
+        ta.selectionStart = ta.selectionEnd = 0;
+        ta.focus();
+        ta.dispatchEvent(new Event('input', { bubbles: true }));
+        closeTemplateModal();
+
+        // Save as pending raw template for backend re-association
+        if (/\[[^\]]*\]/.test(tmpl.raw_text)) {
+            _pendingRawTemplate = tmpl.raw_text;
+            try { localStorage.setItem('grossapp-pending-template', tmpl.raw_text); } catch {}
+        }
+
+        recordSnapshot('template-applied');
+        fieldAdv.anchor = -1;
+        clearTimeout(fieldAdv.timer);
+        refreshFieldCounter();
+        setTimeout(() => goToNextField(0), 50);
+        toast(`Template applied — ${tmpl.placeholders ?? '?'} fields to fill`, 'blue');
+    }
+
+    // ── Similar cases sidebar render ──────────────────────────────────────────
+    // Called by fetchSuggestions after the parallel similarity request settles.
 
     function renderSimilarCases(cases) {
         const list = document.getElementById('similar-list');
         if (!list) return;
 
-        if (cases.length === 0) {
+        if (!cases || cases.length === 0) {
             list.innerHTML = '<span class="sim-empty">No similar cases found yet</span>';
             return;
         }
 
         list.innerHTML = cases.map(c => {
-            const pct   = Math.round(c.similarity * 100);
-            const cls   = pct >= 70 ? 'high' : pct >= 40 ? 'medium' : 'low';
-            const hist  = c.histories || '—';
-            const date  = c.submitted_at ? c.submitted_at.substring(0, 10) : '';
+            const pct  = Math.round(c.similarity * 100);
+            const cls  = pct >= 70 ? 'high' : pct >= 40 ? 'medium' : 'low';
+            const hist = c.histories || '\u2014';
+            const date = c.submitted_at ? c.submitted_at.substring(0, 10) : '';
             const chars = c.gross_chars ? `${c.gross_chars} chars` : '';
-            // Clean excerpt: strip leading specimen header line
-            const excerptRaw = (c.excerpt || '').replace(/^[A-Z]\.\s.*\n?/, '').trim();
-            const excerpt    = excerptRaw.substring(0, 110);
+            const excerptRaw = (c.excerpt || '').replace(/^[A-Z]\. .*\n?/, '').trim();
+            const excerpt = excerptRaw.substring(0, 110);
+            const topTerms = (c.top_terms || []).slice(0, 4).map(t => t.term).join(', ');
             return `<div class="sim-card">
                 <div class="sim-card-head">
                     <span class="sim-specimen">${_esc(c.specimen || 'Unknown specimen')}</span>
                     <span class="sim-score ${cls}">${pct}%</span>
                 </div>
                 <div class="sim-histories">${_esc(hist)}</div>
-                <div class="sim-excerpt">${_esc(excerpt)}${excerptRaw.length > 110 ? '…' : ''}</div>
-                <div class="sim-meta">${date}${chars ? ' · ' + chars : ''}</div>
+                <div class="sim-excerpt">${_esc(excerpt)}${excerptRaw.length > 110 ? '\u2026' : ''}</div>
+                ${topTerms ? `<div class="sim-terms">${_esc(topTerms)}</div>` : ''}
+                <div class="sim-meta">${date}${chars ? ' \u00b7 ' + chars : ''}</div>
             </div>`;
         }).join('');
     }
@@ -1835,7 +2083,8 @@ const App = (() => {
         toggleTheme, toggleFormat, toggleRapidMode,
         goToNextField, goPrevField, toggleAutoAdvance, toggleFieldPrefs,
         pasteFromClipboard,
-        openHistoryModal, closeHistoryModal, restoreHistoryEntry
+        openHistoryModal, closeHistoryModal, restoreHistoryEntry,
+        openTemplateModal, closeTemplateModal, applyTemplate
     };
 
 })();

@@ -36,8 +36,9 @@ const API = (() => {
 
     // ── Templates ─────────────────────────────────────────────────────────────
     const templates = {
+        // Fetch saved blank templates for a specimen (for the Template modal)
         forSpecimen: (specimen_id) =>
-            request(`templates.php?specimen_id=${specimen_id}`),
+            request(`templates_suggest.php?specimen_id=${specimen_id}`),
         submit: (specimen_id, raw_text) =>
             request('templates.php', {
                 method: 'POST',
