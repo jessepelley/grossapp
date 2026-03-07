@@ -1,8 +1,9 @@
 /**
- * api.js  v2.1
+ * api.js  v2.2
  * All communication with the PHP backend lives here.
  * Import or include before app.js.
  */
+console.log('%capi.js v2.2', 'color:#1a4f8a;font-weight:bold', 'loaded ✓');
 
 const API = (() => {
 

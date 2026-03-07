@@ -3,6 +3,7 @@
  * Main application controller.
  * Depends on: cassette.js, api.js
  */
+console.log('%capp.js', 'color:#1a4f8a;font-weight:bold', 'loaded ✓');
 
 const App = (() => {
 

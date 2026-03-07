@@ -15,7 +15,7 @@
  *   3. selectionchange — when DMO "Next Field" selects [___], auto-fills.
  *   4. +Block / +Specimen / ↩ Undo buttons.
  */
-
+console.log('%ccassette.js v1.9', 'color:#1a4f8a;font-weight:bold', 'loaded ✓');
 const Cassette = (() => {
 
     // ── Format definitions ────────────────────────────────────────────────────
