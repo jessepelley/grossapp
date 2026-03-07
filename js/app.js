@@ -976,6 +976,27 @@ const App = (() => {
         map.scrollTop = map.scrollHeight;
     }
 
+    // ── Specimen name normalizer ──────────────────────────────────────────────
+    // Strips clerical suffixes from the specimen site field in the first line.
+    // Keeps the medically meaningful part only.
+    // Must stay in sync with normalize_specimen_name() in tokenize_worker.py.
+    function normalizeSpecimenName(raw) {
+        let n = raw.trim();
+        // Truncate at first comma (suture/weight info always follows a comma)
+        const comma = n.indexOf(',');
+        if (comma > 2) n = n.substring(0, comma).trim();
+        // Remove trailing suture phrase (no-comma version, e.g. "...tissue suture short superior long lateral")
+        n = n.replace(/\s+(sutures?|suture marks?).*$/i, '');
+        n = n.replace(/\s+(long lateral|short superior|double deep).*$/i, '');
+        // Remove trailing weight
+        n = n.replace(/\s+\d+\.?\d*\s*g\s*$/i, '');
+        // Remove sentinel node number
+        n = n.replace(/\s+#\d+\s*$/i, '');
+        // Remove diagnostic query suffix
+        n = n.replace(/\?.*$/, '');
+        return n.trim().replace(/,\s*$/, '').trim();
+    }
+
     // Scan textarea for filled-in specimen site and infer specimen.
     // Re-runs even when specimen is already set IF it was auto-inferred (not manually set).
     // Pattern: specimen site "something that is not [___]"
@@ -995,10 +1016,8 @@ const App = (() => {
             let inferred = m[1].trim();
             if (!inferred || /^\[/.test(inferred)) return;
 
-            // Truncate at first comma — removes orientation/description details
-            // e.g. "right breast lump, sutures long..." → "right breast lump"
-            const commaIdx = inferred.indexOf(',');
-            if (commaIdx > 2) inferred = inferred.substring(0, commaIdx).trim();
+            // Normalize: strip suture/weight/orientation suffixes
+            inferred = normalizeSpecimenName(inferred);
             if (!inferred) return;
 
             // Skip if nothing changed
